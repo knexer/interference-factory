@@ -15,22 +15,21 @@ mod grid;
 
 // Immediate next steps:
 // - Basic player animation (done)
+// - Figure out system ordering - too many things are nondeterministic right now. (done)
 // - Sound on picking up candy and fuel
 // - Add a basic time loop - play twice, with your past self going through the level alongside you the second time.
 // - Iterate further on plugin structure
-// - Actually use git lol
 
 // More gameplay:
 // - Add a between-levels upgrade system of some kind; spend candy, get upgrades.
 
 // Tech debt:
 // - No hierarchical entity relationships; everything is just flat right now. That is fine for now but not forever.
-// - Pull out more plugins.
-// - Review the inventory changes - is there a better way to do this?
-// - Figure out system ordering - too many things are nondeterministic right now.
+// - Pull out more plugins. main.rs is a dumping ground right now lol
+// - Candy/fuel could easily be generalized, across spawning, pickup, inventory, and display. But some of the similarites are
+// likely just because the game is so simple right now - without more types to generalize over, it's hard to say what the right abstractions are.
 
 // Bugs:
-// - Layout order for score and fuel display are nondeterministic!
 // - Fuel can spawn on the last cell, and if it does you won't get to use it as the game will end first.
 
 // Polish:
@@ -43,18 +42,24 @@ mod grid;
 // - Sound effects for picking up candies
 // - Transparency for the candy sprite
 // - Queue inputs so they aren't skipped if the player is moving
+// - Animate a wiggle when the player tries to move off the grid
 
 // Time loop todo:
 // - Make score and fuel into components on the player (done)
-// - Review those changes, they felt a little awkward
+// - Review those changes, they felt a little awkward (done)
 // - Record the player's moves
 // - Add state to track whether we're in the first or second loop
 // - Add a system to replay the player's moves from the first loop
 // - Add state to track whose turn it is (player or past self should alternate)
 
-// Two complications here:
-// 1. Adding/removing components is actually a pain, because it doesn't happen without apply_deferred. This makes ordering a bit more complicated.
-// 2. Ordering across plugin boundaries also sucks, it requires us to couple the plugins together. This might be an indication that the plugin structure is wrong.
+// General things to think about:
+// - Adding/removing components is actually a pain, because it requires apply_deferred. This makes ordering a bit more complicated.
+// Should I be using exclusive systems instead when I basically want ~immediate application?
+// - Ordering across plugin boundaries kinda sucks. System sets help.
+// - Plugin abstraction is unclear in general. It seems like there are a lot of ways for plugins to interact with each other,
+// besides simply adding ECS things, or events or resources, to the same world.
+// - Not using events yet. Should I be? Would they be helpful for the movement animation in lieu of adding/removing components?
+// - Plugins can be parameterized (they're structs). Can that be used for the grid parameters?
 
 fn main() {
     App::new()
@@ -181,56 +186,8 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 }
 
- #[derive(Clone)]
-enum CandyColor {
-    Red,
-    Green,
-    // Blue,
-    Yellow,
-}
-
-impl CandyColor {
-    fn asset_name(&self) -> &'static str {
-        match self {
-            CandyColor::Red => "red-candy.png",
-            CandyColor::Green => "green-candy.png",
-            // CandyColor::Blue => "blue-candy.png",
-            CandyColor::Yellow => "yellow-candy.png"
-        }
-    }
-}
-
-#[derive(Component)]
-struct Candy;
-
-const NUM_CANDIES: usize = 10;
-
-fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let mut rng = rand::thread_rng();
-    for _ in 0..NUM_CANDIES {
-        let color =  match rng.gen_range(0..3) {
-            0 => CandyColor::Red,
-            1 => CandyColor::Green,
-            2 => CandyColor::Yellow,
-            _ => unreachable!(),
-        };
-        commands.spawn((
-            Candy,
-            GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
-            SpriteBundle {
-                texture: asset_server.load(color.asset_name()),
-                sprite: Sprite {
-                    custom_size: Some(Vec2::splat(64.)),
-                    ..default()
-                },
-                ..default()
-            },
-            DistributeOnGrid,
-            DespawnOnExitGameOver,
-        ));
-    }
-}
-
+// TODO split input handling and movement into separate systems to facilitate input queuing
+// Should those communicate with events?
 fn move_player_on_grid(
     mut player: Query<(&mut GridLocation, &mut Inventory), (With<Player>, Without<AnimateTranslation>)>,
     keyboard_input: Res<Input<KeyCode>>
@@ -238,8 +195,6 @@ fn move_player_on_grid(
     if player.is_empty() {
         return;
     }
-
-    let (grid_location, inventory) = player.single();
 
     let mut offset = IVec2 {x:0, y:0};
     let mut fuel_cost = 0;
@@ -261,6 +216,9 @@ fn move_player_on_grid(
             fuel_cost += 1;
         }
     }
+
+    // TODO split would be here basically
+    let (grid_location, inventory) = player.single();
     if offset.length_squared() == 0 || fuel_cost > inventory.fuel {
         return;
     }
@@ -279,6 +237,67 @@ fn move_player_on_grid(
     }
 }
 
+fn detect_game_over(mut next_state: ResMut<NextState<AppState>>, player: Query<&GridLocation, (With<Player>, Without<AnimateTranslation>)>) {
+    if player.is_empty() {
+        return;
+    }
+
+    let player_location = player.single();
+    if player_location == (&GridLocation(IVec2{x: MAX_X - 1, y: 0})) {
+        next_state.set(AppState::GameOver);
+    }
+}
+
+#[derive(Clone)]
+enum CandyColor {
+   Red,
+   Green,
+   // Blue,
+   Yellow,
+}
+
+impl CandyColor {
+   fn asset_name(&self) -> &'static str {
+       match self {
+           CandyColor::Red => "red-candy.png",
+           CandyColor::Green => "green-candy.png",
+           // CandyColor::Blue => "blue-candy.png",
+           CandyColor::Yellow => "yellow-candy.png"
+       }
+   }
+}
+
+#[derive(Component)]
+struct Candy;
+
+const NUM_CANDIES: usize = 10;
+
+fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
+   let mut rng = rand::thread_rng();
+   for _ in 0..NUM_CANDIES {
+       let color =  match rng.gen_range(0..3) {
+           0 => CandyColor::Red,
+           1 => CandyColor::Green,
+           2 => CandyColor::Yellow,
+           _ => unreachable!(),
+       };
+       commands.spawn((
+           Candy,
+           GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
+           SpriteBundle {
+               texture: asset_server.load(color.asset_name()),
+               sprite: Sprite {
+                   custom_size: Some(Vec2::splat(64.)),
+                   ..default()
+               },
+               ..default()
+           },
+           DistributeOnGrid,
+           DespawnOnExitGameOver,
+       ));
+   }
+}
+
 fn pick_up_candy(
     mut commands: Commands,
     mut player: Query<(&GridLocation, &mut Inventory), (With<Player>, Without<AnimateTranslation>)>,
@@ -295,17 +314,6 @@ fn pick_up_candy(
             let (_, mut inventory) = player.single_mut();
             inventory.candies += 1;
         }
-    }
-}
-
-fn detect_game_over(mut next_state: ResMut<NextState<AppState>>, player: Query<&GridLocation, (With<Player>, Without<AnimateTranslation>)>) {
-    if player.is_empty() {
-        return;
-    }
-    
-    let player_location = player.single();
-    if player_location == (&GridLocation(IVec2{x: MAX_X - 1, y: 0})) {
-        next_state.set(AppState::GameOver);
     }
 }
 
