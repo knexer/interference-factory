@@ -78,7 +78,7 @@ fn main() {
             ).chain().before(ApplyGridMovement)
         ).add_systems(Update,
             (
-                move_player_on_grid.before(ApplyGridMovement),
+                (process_movement_input, move_player_on_grid).chain().before(ApplyGridMovement),
                 (
                     pick_up_item,
                     add_item_to_inventory,
@@ -88,6 +88,7 @@ fn main() {
                 ).chain().after(ApplyGridMovement),
                 detect_game_over,
             ).chain().run_if(in_state(AppState::Playing)))
+        .insert_resource(MoveBuffer::default())
         .add_event::<ItemGet>()
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_plugins(GameOverScreenPlugin)
@@ -214,37 +215,56 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 }
 
-// TODO split input handling and movement into separate systems to facilitate input queuing
-// Should those communicate with events?
-fn move_player_on_grid(
-    mut player: Query<(&mut GridLocation, &mut Inventory, &AnimateTranslation), With<Player>>,
-    keyboard_input: Res<Input<KeyCode>>
+#[derive(Resource, Default)]
+struct MoveBuffer {
+    next_move: IVec2
+}
+
+fn process_movement_input(
+    keyboard_input: Res<Input<KeyCode>>,
+    mut move_buffer: ResMut<MoveBuffer>,
 ) {
     let mut offset = IVec2 {x:0, y:0};
-    let mut fuel_cost = 0;
     if keyboard_input.any_just_pressed([KeyCode::Right, KeyCode::D]) {
         offset.x += 1;
     }
     if keyboard_input.any_just_pressed([KeyCode::Left, KeyCode::A]) {
         offset.x -= 1;
-        if offset.x < 0 {
-            fuel_cost += 1;
-        }
     }
     if keyboard_input.any_just_pressed([KeyCode::Down, KeyCode::S]) {
         offset.y -= 1;
     }
     if keyboard_input.any_just_pressed([KeyCode::Up, KeyCode::W]) {
         offset.y += 1;
-        if offset.y > 0 {
-            fuel_cost += 1;
-        }
     }
 
-    // TODO split would be here basically
+    if offset.length_squared() > 0 {
+        move_buffer.next_move = offset;
+    }
+}
+
+fn move_player_on_grid(
+    mut player: Query<(&mut GridLocation, &mut Inventory, &AnimateTranslation), With<Player>>,
+    mut move_buffer: ResMut<MoveBuffer>,
+) {
     let (grid_location, inventory, animation) = player.single();
     if !animation.timer.finished() {
         return;
+    }
+
+    let offset = move_buffer.next_move;
+    if offset.length_squared() == 0 {
+        return;
+    }
+
+    move_buffer.next_move = IVec2::ZERO;
+
+    let mut fuel_cost = 0;
+    if offset.x < 0 {
+        fuel_cost += 1;
+    }
+    if offset.y > 0 {
+        fuel_cost += 1;
     }
 
     if offset.length_squared() == 0 || fuel_cost > inventory.fuel {
