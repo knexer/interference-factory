@@ -81,10 +81,12 @@ fn main() {
         ).add_systems(Update,
             (
                 move_player_on_grid.before(ApplyGridMovement),
-                (pick_up_candy, update_score_display).chain().after(ApplyGridMovement),
-                (pick_up_fuel, update_fuel_display).chain().after(ApplyGridMovement),
-                detect_game_over.after(pick_up_candy).after(pick_up_fuel),
-            ).run_if(in_state(AppState::Playing)))
+                (
+                    (pick_up_candy, update_score_display).chain(),
+                    (pick_up_fuel, update_fuel_display).chain(),
+                ).after(ApplyGridMovement),
+                detect_game_over,
+            ).chain().run_if(in_state(AppState::Playing)))
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_plugins(GameOverScreenPlugin)
         .add_systems(OnExit(AppState::GameOver), despawn_after_game_over)
@@ -169,6 +171,12 @@ struct Inventory {
 
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
     let grid_location = GridLocation(IVec2 {x: 0, y: MAX_Y - 1});
+    let make_finished_timer = |duration: Duration| {
+        let mut timer = Timer::new(duration, TimerMode::Once);
+        timer.tick(duration);
+        timer
+    };
+
     commands.spawn((
         Player,
         grid_location,
@@ -178,10 +186,13 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
             transform: Transform::from_translation(center_of(&grid_location).extend(0.)),
             ..default()
         },
-        SnapToGrid{animate: Some((
-            Duration::from_millis(200),
-            CubicSegment::new_bezier(Vec2::new(0., 0.), Vec2::new(0.4, 1.5)),
-        ))},
+        SnapToGrid,
+        AnimateTranslation{
+            start: center_of(&grid_location),
+            end: center_of(&grid_location),
+            timer: make_finished_timer(Duration::from_millis(200)),
+            ease: CubicSegment::new_bezier(Vec2::new(0., 0.), Vec2::new(0.4, 1.5)),
+        },
         DespawnOnExitGameOver,
     ));
 }
@@ -189,13 +200,9 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
 // TODO split input handling and movement into separate systems to facilitate input queuing
 // Should those communicate with events?
 fn move_player_on_grid(
-    mut player: Query<(&mut GridLocation, &mut Inventory), (With<Player>, Without<AnimateTranslation>)>,
+    mut player: Query<(&mut GridLocation, &mut Inventory, &AnimateTranslation), With<Player>>,
     keyboard_input: Res<Input<KeyCode>>
 ) {
-    if player.is_empty() {
-        return;
-    }
-
     let mut offset = IVec2 {x:0, y:0};
     let mut fuel_cost = 0;
     if keyboard_input.any_just_pressed([KeyCode::Right, KeyCode::D]) {
@@ -218,7 +225,11 @@ fn move_player_on_grid(
     }
 
     // TODO split would be here basically
-    let (grid_location, inventory) = player.single();
+    let (grid_location, inventory, animation) = player.single();
+    if !animation.timer.finished() {
+        return;
+    }
+
     if offset.length_squared() == 0 || fuel_cost > inventory.fuel {
         return;
     }
@@ -228,21 +239,20 @@ fn move_player_on_grid(
         return;
     }
     
-    let (mut grid_location, _) = player.single_mut();
+    let (mut grid_location, mut inventory, _) = player.single_mut();
     grid_location.0 = next_pos;
 
     if fuel_cost > 0 {
-        let (_, mut inventory) = player.single_mut();
         inventory.fuel -= fuel_cost;
     }
 }
 
-fn detect_game_over(mut next_state: ResMut<NextState<AppState>>, player: Query<&GridLocation, (With<Player>, Without<AnimateTranslation>)>) {
-    if player.is_empty() {
+fn detect_game_over(mut next_state: ResMut<NextState<AppState>>, player: Query<(&GridLocation, &AnimateTranslation), With<Player>>) {
+    let (player_location, animation) = player.single();
+    if !animation.timer.finished() {
         return;
     }
 
-    let player_location = player.single();
     if player_location == (&GridLocation(IVec2{x: MAX_X - 1, y: 0})) {
         next_state.set(AppState::GameOver);
     }
@@ -300,18 +310,18 @@ fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 fn pick_up_candy(
     mut commands: Commands,
-    mut player: Query<(&GridLocation, &mut Inventory), (With<Player>, Without<AnimateTranslation>)>,
+    mut player: Query<(&GridLocation, &mut Inventory, &AnimateTranslation), With<Player>>,
     candies: Query<(Entity, &GridLocation), With<Candy>>)
 {
-    if player.is_empty() {
+    let (&player_location, _, animation) = player.single();
+    if !animation.timer.finished() {
         return;
     }
 
-    let (&player_location, _) = player.single();
     for (entity, candy_location) in candies.iter() {
         if player_location == *candy_location {
             commands.entity(entity).despawn();
-            let (_, mut inventory) = player.single_mut();
+            let (_, mut inventory, _) = player.single_mut();
             inventory.candies += 1;
         }
     }
@@ -344,18 +354,18 @@ fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 fn pick_up_fuel(
     mut commands: Commands,
-    mut player: Query<(&GridLocation, &mut Inventory), (With<Player>, Without<AnimateTranslation>)>,
+    mut player: Query<(&GridLocation, &mut Inventory, &AnimateTranslation), With<Player>>,
     fuel: Query<(Entity, &GridLocation), With<Fuel>>)
 {
-    if player.is_empty() {
+    let (&player_location, _, animation) = player.single();
+    if !animation.timer.finished() {
         return;
     }
 
-    let (&player_location, _) = player.single();
     for (entity, fuel_location) in fuel.iter() {
         if player_location == *fuel_location {
             commands.entity(entity).despawn();
-            let (_, mut inventory) = player.single_mut();
+            let (_, mut inventory, _) = player.single_mut();
             inventory.fuel += 1;
         }
     }

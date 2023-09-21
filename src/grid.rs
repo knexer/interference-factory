@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::{AppState, GRID_SPACING};
@@ -14,9 +14,7 @@ impl Plugin for GridPlugin {
         .add_systems(OnEnter(AppState::Playing), distribute_on_grid.in_set(ApplyGridMovement))
         .add_systems(Update, (
             snap_to_grid,
-            apply_deferred,
             animate_translation,
-            apply_deferred,
         ).in_set(ApplyGridMovement).chain().run_if(in_state(AppState::Playing)));
     }
 }
@@ -25,26 +23,20 @@ impl Plugin for GridPlugin {
 pub struct GridLocation(pub IVec2);
 
 #[derive(Component)]
-pub struct SnapToGrid {
-    pub animate: Option<(Duration, CubicSegment<Vec2>)>,
-}
+pub struct SnapToGrid;
 
 pub fn center_of(grid_location: &GridLocation) -> Vec2 {
     Vec2::new((grid_location.x * GRID_SPACING) as f32, (grid_location.y * GRID_SPACING) as f32)
 }
 
-fn snap_to_grid(mut commands: Commands, mut query: Query<(Entity, &mut Transform, &GridLocation, &SnapToGrid), Changed<GridLocation>>) {
-    for (entity, mut transform, grid_location, snap) in query.iter_mut() {
+fn snap_to_grid(mut query: Query<(&mut Transform, Option<&mut AnimateTranslation>, &GridLocation), (With<SnapToGrid>, Changed<GridLocation>)>) {
+    for (mut transform, animate_transform, grid_location) in query.iter_mut() {
         let destination = Vec2::new((grid_location.x * GRID_SPACING) as f32, (grid_location.y * GRID_SPACING) as f32);
-        match &snap.animate {
-            Some((duration, ease)) => {
-                // Add a component to animate.
-                commands.entity(entity).insert(AnimateTranslation {
-                    start: transform.translation.truncate(),
-                    end: destination,
-                    timer: Timer::new(*duration, TimerMode::Once),
-                    ease: ease.clone()
-                });
+        match animate_transform {
+            Some(mut animate_transform) => {
+                animate_transform.start = transform.translation.truncate();
+                animate_transform.end = destination;
+                animate_transform.timer.reset();
             },
             None => {
                 transform.translation = destination.extend(0.);
@@ -106,11 +98,10 @@ pub struct AnimateTranslation {
     pub ease: CubicSegment<Vec2>
 }
 
-fn animate_translation(mut commands: Commands, time: Res<Time>, mut query: Query<(Entity, &mut Transform, &mut AnimateTranslation)>) {
-    for (entity, mut transform, mut animate_translation) in query.iter_mut() {
+fn animate_translation(time: Res<Time>, mut query: Query<(&mut Transform, &mut AnimateTranslation)>) {
+    for (mut transform, mut animate_translation) in query.iter_mut() {
         if animate_translation.timer.tick(time.delta()).just_finished() {
             transform.translation = animate_translation.end.extend(0.);
-            commands.entity(entity).remove::<AnimateTranslation>();
         } else {
             let progress = animate_translation.timer.percent();
             let lerp = animate_translation.ease.ease(progress);
