@@ -25,10 +25,7 @@ mod grid;
 
 // Tech debt:
 // - No hierarchical entity relationships; everything is just flat right now. That is fine for now but not forever.
-// - Pull out more plugins. main.rs is a dumping ground right now lol
-// - Candy/fuel could easily be generalized, across spawning, pickup, inventory, and display. But some of the similarites are
-// likely just because the game is so simple right now - without more types to generalize over, it's hard to say what the right abstractions are.
-// Okay actually let's do that now. Add an Item enum, and generalize the candy/fuel code over it.
+// - Pull out more plugins. main.rs is a dumping ground right now lol. Maybe inventory stuff?
 
 // Bugs:
 // - Fuel can spawn on the last cell, and if it does you won't get to use it as the game will end first.
@@ -83,13 +80,15 @@ fn main() {
             (
                 move_player_on_grid.before(ApplyGridMovement),
                 (
-                    (pick_up_candy, add_candy_to_inventory, update_score_display, play_candy_pickup_sound).chain(),
-                    (pick_up_fuel, add_fuel_to_inventory, update_fuel_display, play_fuel_pickup_sound).chain(),
-                ).after(ApplyGridMovement),
+                    pick_up_item,
+                    add_item_to_inventory,
+                    update_score_display,
+                    update_fuel_display,
+                    play_item_pickup_sound,
+                ).chain().after(ApplyGridMovement),
                 detect_game_over,
             ).chain().run_if(in_state(AppState::Playing)))
-        .add_event::<CandyGet>()
-        .add_event::<FuelGet>()
+        .add_event::<ItemGet>()
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_plugins(GameOverScreenPlugin)
         .add_systems(OnExit(AppState::GameOver), despawn_after_game_over)
@@ -170,6 +169,21 @@ struct Player;
 struct Inventory {
     candies: i32,
     fuel: i32,
+}
+
+impl Inventory {
+    fn add(&mut self, item: Item) {
+        match item {
+            Item::Candy => self.candies += 1,
+            Item::Fuel => self.fuel += 1,
+        }
+    }
+}
+
+#[derive(Component, Clone, Copy)]
+enum Item {
+    Candy,
+    Fuel,
 }
 
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -280,9 +294,6 @@ impl CandyColor {
    }
 }
 
-#[derive(Component)]
-struct Candy;
-
 const NUM_CANDIES: usize = 10;
 
 fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -295,7 +306,7 @@ fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
            _ => unreachable!(),
        };
        commands.spawn((
-           Candy,
+           Item::Candy,
            GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
            SpriteBundle {
                texture: asset_server.load(color.asset_name()),
@@ -312,59 +323,56 @@ fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
 }
 
 #[derive(Event)]
-struct CandyGet {
+struct ItemGet {
     player: Entity,
+    item: Item,
 }
 
-#[derive(Event)]
-struct FuelGet {
-    player: Entity,
-}
-
-fn pick_up_candy(
+fn pick_up_item(
     mut commands: Commands,
     player: Query<(Entity, &GridLocation, &AnimateTranslation), (With<Player>, With<Inventory>)>,
-    candies: Query<(Entity, &GridLocation), With<Candy>>,
-    mut event_writer: EventWriter<CandyGet>)
+    items: Query<(Entity, &GridLocation, &Item)>,
+    mut event_writer: EventWriter<ItemGet>)
 {
     let (player, &player_location, animation) = player.single();
     if !animation.timer.finished() {
         return;
     }
 
-    for (entity, candy_location) in candies.iter() {
-        if player_location == *candy_location {
+    for (entity, item_location, item) in items.iter() {
+        if player_location == *item_location {
             commands.entity(entity).despawn();
-            event_writer.send(CandyGet{player});
+            event_writer.send(ItemGet{player, item: *item});
         }
     }
 }
 
-fn add_candy_to_inventory(
+fn add_item_to_inventory(
     mut player: Query<&mut Inventory, With<Player>>,
-    mut event_reader: EventReader<CandyGet>)
+    mut event_reader: EventReader<ItemGet>)
 {
     for event in event_reader.iter() {
         let mut inventory = player.get_mut(event.player).unwrap();
-        inventory.candies += 1;
+        inventory.add(event.item);
     }
 }
 
-fn play_candy_pickup_sound(
+fn play_item_pickup_sound(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut event_reader: EventReader<CandyGet>)
+    mut event_reader: EventReader<ItemGet>)
 {
-    for _ in event_reader.iter() {
+    for event in event_reader.iter() {
+        let sound = match event.item {
+            Item::Candy => "candy-pickup.wav",
+            Item::Fuel => "fuel-pickup.wav",
+        };
         commands.spawn(AudioBundle{
-            source: asset_server.load("candy-pickup.wav"),
+            source: asset_server.load(sound),
             ..default()
         });
     }
 }
-
-#[derive(Component)]
-struct Fuel;
 
 const NUM_FUEL: usize = 2;
 
@@ -372,7 +380,7 @@ fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut rng = rand::thread_rng();
     for _ in 0..NUM_FUEL {
         commands.spawn((
-            Fuel,
+            Item::Fuel,
             GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
             SpriteBundle {
                 texture: asset_server.load("fuel.png"),
@@ -385,48 +393,6 @@ fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
             DistributeOnGrid,
             DespawnOnExitGameOver,
         ));
-    }
-}
-
-fn pick_up_fuel(
-    mut commands: Commands,
-    player: Query<(Entity, &GridLocation, &AnimateTranslation), With<Player>>,
-    fuel: Query<(Entity, &GridLocation), With<Fuel>>,
-    mut event_writer: EventWriter<FuelGet>)
-{
-    let (player, &player_location, animation) = player.single();
-    if !animation.timer.finished() {
-        return;
-    }
-
-    for (entity, fuel_location) in fuel.iter() {
-        if player_location == *fuel_location {
-            commands.entity(entity).despawn();
-            event_writer.send(FuelGet{player});
-        }
-    }
-}
-
-fn add_fuel_to_inventory(
-    mut player: Query<&mut Inventory, With<Player>>,
-    mut event_reader: EventReader<FuelGet>)
-{
-    for event in event_reader.iter() {
-        let mut inventory = player.get_mut(event.player).unwrap();
-        inventory.fuel += 1;
-    }
-}
-
-fn play_fuel_pickup_sound(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut event_reader: EventReader<FuelGet>)
-{
-    for _ in event_reader.iter() {
-        commands.spawn(AudioBundle{
-            source: asset_server.load("fuel-pickup.wav"),
-            ..default()
-        });
     }
 }
 
