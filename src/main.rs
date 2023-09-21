@@ -16,7 +16,7 @@ mod grid;
 // Immediate next steps:
 // - Basic player animation (done)
 // - Figure out system ordering - too many things are nondeterministic right now. (done)
-// - Sound on picking up candy and fuel
+// - Sound on picking up candy and fuel (done-ish)
 // - Add a basic time loop - play twice, with your past self going through the level alongside you the second time.
 // - Iterate further on plugin structure
 
@@ -45,19 +45,10 @@ mod grid;
 // Time loop todo:
 // - Make score and fuel into components on the player (done)
 // - Review those changes, they felt a little awkward (done)
-// - Record the player's moves
+// - Record the player's moves (done)
 // - Add state to track whether we're in the first or second loop
 // - Add a system to replay the player's moves from the first loop
 // - Add state to track whose turn it is (player or past self should alternate)
-
-// General things to think about:
-// - Adding/removing components is actually a pain, because it requires apply_deferred. This makes ordering a bit more complicated.
-// Should I be using exclusive systems instead when I basically want ~immediate application?
-// - Ordering across plugin boundaries kinda sucks. System sets help.
-// - Plugin abstraction is unclear in general. It seems like there are a lot of ways for plugins to interact with each other,
-// besides simply adding ECS things, or events or resources, to the same world.
-// - Not using events yet. Should I be? Would they be helpful for the movement animation in lieu of adding/removing components?
-// - Plugins can be parameterized (they're structs). Can that be used for the grid parameters?
 
 fn main() {
     App::new()
@@ -78,7 +69,12 @@ fn main() {
             ).chain().before(ApplyGridMovement)
         ).add_systems(Update,
             (
-                (process_movement_input, move_player_on_grid).chain().before(ApplyGridMovement),
+                (
+                    process_movement_input,
+                    debuffer_move_inputs,
+                    move_player_on_grid,
+                    record_move_attempts,
+                ).chain().before(ApplyGridMovement),
                 (
                     pick_up_item,
                     add_item_to_inventory,
@@ -90,9 +86,11 @@ fn main() {
             ).chain().run_if(in_state(AppState::Playing)))
         .insert_resource(MoveBuffer::default())
         .add_event::<ItemGet>()
+        .add_event::<MoveAttempt>()
+        .insert_resource(TimeLoopRecording::default())
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_plugins(GameOverScreenPlugin)
-        .add_systems(OnExit(AppState::GameOver), despawn_after_game_over)
+        .add_systems(OnExit(AppState::GameOver), (despawn_after_game_over, reset_recording))
         .run();
 }
 
@@ -243,11 +241,18 @@ fn process_movement_input(
     }
 }
 
-fn move_player_on_grid(
-    mut player: Query<(&mut GridLocation, &mut Inventory, &AnimateTranslation), With<Player>>,
+#[derive(Event)]
+struct MoveAttempt {
+    player: Entity,
+    offset: IVec2,
+}
+
+fn debuffer_move_inputs(
+    player: Query<(Entity, &AnimateTranslation), With<Player>>,
     mut move_buffer: ResMut<MoveBuffer>,
+    mut event_writer: EventWriter<MoveAttempt>,
 ) {
-    let (grid_location, inventory, animation) = player.single();
+    let (player, animation) = player.single();
     if !animation.timer.finished() {
         return;
     }
@@ -258,6 +263,23 @@ fn move_player_on_grid(
     }
 
     move_buffer.next_move = IVec2::ZERO;
+    event_writer.send(MoveAttempt{player, offset});
+}
+
+fn move_player_on_grid(
+    mut player: Query<(&mut GridLocation, &mut Inventory), With<Player>>,
+    mut events: EventReader<MoveAttempt>,
+) {
+    if events.is_empty() {
+        return;
+    }
+
+    if events.len() > 1 {
+        panic!("Multiple move attempts in one frame!");
+    }
+
+    let &MoveAttempt{player: player_entity, offset} = events.iter().next().unwrap();
+    let (grid_location, inventory) = player.get(player_entity).unwrap();
 
     let mut fuel_cost = 0;
     if offset.x < 0 {
@@ -267,7 +289,7 @@ fn move_player_on_grid(
         fuel_cost += 1;
     }
 
-    if offset.length_squared() == 0 || fuel_cost > inventory.fuel {
+    if fuel_cost > inventory.fuel {
         return;
     }
 
@@ -275,12 +297,32 @@ fn move_player_on_grid(
     if next_pos.x < 0 || next_pos.x >= MAX_X || next_pos.y < 0 || next_pos.y >= MAX_Y {
         return;
     }
-    
-    let (mut grid_location, mut inventory, _) = player.single_mut();
+
+    let (mut grid_location, mut inventory) = player.single_mut();
     grid_location.0 = next_pos;
 
     if fuel_cost > 0 {
         inventory.fuel -= fuel_cost;
+    }
+}
+
+#[derive(Resource, Default)]
+struct TimeLoopRecording {
+    moves: Vec<IVec2>,
+}
+
+fn record_move_attempts(
+    mut recording: ResMut<TimeLoopRecording>,
+    mut events: EventReader<MoveAttempt>,
+) {
+    for event in events.iter() {
+        recording.moves.push(event.offset);
+    }
+}
+
+fn reset_recording(mut recording: ResMut<TimeLoopRecording>) {
+    for i in 0..recording.moves.len() {
+        println!("Move {}: {}", i, recording.moves.pop().unwrap());
     }
 }
 
