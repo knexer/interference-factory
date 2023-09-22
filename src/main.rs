@@ -6,10 +6,12 @@ use rand::Rng;
 use game_over_screen::GameOverScreenPlugin;
 use grid::{GridPlugin, GridLocation, SnapToGrid, DistributeOnGrid, center_of, ApplyGridMovement, AnimateTranslation};
 use inventory::{Inventory, Item, ItemGet, PickUpItems, InventoryPlugin};
+use ui::{UiPlugin, UpdateUi};
 
 mod game_over_screen;
 mod grid;
 mod inventory;
+mod ui;
 
 // Current gameplay:
 // - move down and right on a grid, optimize your path to get the most candy
@@ -59,19 +61,19 @@ fn main() {
         .add_systems(Startup, spawn_cam)
         .add_plugins(GridPlugin)
         .add_plugins(InventoryPlugin)
-        .configure_sets(Update, (ApplyGridMovement, PickUpItems).chain())
+        .add_plugins(UiPlugin)
         .add_systems(OnEnter(AppState::Playing),
+        (
             (
-                (
-                    spawn_player,
-                    spawn_grid,
-                    spawn_candies,
-                    spawn_fuel,
-                    spawn_ui,
-                ),
-                apply_deferred
-            ).chain().before(ApplyGridMovement)
-        ).add_systems(Update,
+                spawn_player,
+                spawn_grid,
+                spawn_candies,
+                spawn_fuel,
+            ),
+            apply_deferred
+        ).chain().before(ApplyGridMovement))
+        .configure_sets(Update, (ApplyGridMovement, PickUpItems, UpdateUi).chain())
+        .add_systems(Update,
             (
                 (
                     process_movement_input,
@@ -80,8 +82,6 @@ fn main() {
                     record_move_attempts.run_if(in_state(LoopState::FirstLoop)),
                 ).chain().before(ApplyGridMovement),
                 (
-                    update_score_display,
-                    update_fuel_display,
                     play_item_pickup_sound,
                 ).chain().after(PickUpItems),
                 detect_game_over,
@@ -416,64 +416,5 @@ fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
             DistributeOnGrid,
             DespawnOnExitGameOver,
         ));
-    }
-}
-
-#[derive(Component)]
-struct FuelDisplay;
-
-#[derive(Component)]
-struct ScoreDisplay;
-
-fn spawn_ui(mut commands: Commands) {
-    commands.spawn((
-        NodeBundle{
-            style: Style {
-                width:Val::Percent(100.),
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::FlexStart,
-                ..default()
-            },
-            ..default()
-        },
-        DespawnOnExitPlaying,
-    )).with_children(|parent|{
-        parent.spawn((
-            ScoreDisplay,
-            TextBundle::from_section("Score: 0", TextStyle {font_size: 50., ..default()}),
-        ));
-        parent.spawn((
-            FuelDisplay,
-            TextBundle::from_section("Fuel: 0", TextStyle {font_size: 50., ..default()}),
-        ));
-    });
-}
-
-fn update_score_display(
-    player: Query<&Inventory, (With<Player>, Changed<Inventory>)>,
-    mut display: Query<&mut Text, With<ScoreDisplay>>
-) {
-    if player.is_empty() {
-        return;
-    }
-    
-    let player = player.single();
-    for mut text in display.iter_mut() {
-        text.sections[0].value = format!("Score: {}", player.candies);
-    }
-}
-
-fn update_fuel_display(
-    player: Query<&Inventory, (With<Player>, Changed<Inventory>)>,
-    mut display: Query<&mut Text, With<FuelDisplay>>
-) {
-    if player.is_empty() {
-        return;
-    }
-
-    let player = player.single();
-    for mut text in display.iter_mut() {
-        text.sections[0].value = format!("Fuel: {}", player.fuel);
     }
 }
