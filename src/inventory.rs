@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::{Player, AppState};
+use crate::{AppState, SootSprite};
 use crate::grid::{AnimateTranslation, GridLocation};
 
 #[derive(SystemSet, Hash, Debug, Clone, Eq, PartialEq)]
@@ -41,35 +41,35 @@ impl Inventory {
 
 #[derive(Event)]
 pub struct ItemGet {
-    pub player: Entity,
+    pub soot: Entity,
     pub item: Item,
 }
 
 fn pick_up_item(
     mut commands: Commands,
-    player: Query<(Entity, &GridLocation, &AnimateTranslation), (With<Player>, With<Inventory>)>,
+    soot_sprites: Query<(Entity, &GridLocation, &AnimateTranslation), (With<SootSprite>, With<Inventory>)>,
     items: Query<(Entity, &GridLocation, &Item)>,
     mut event_writer: EventWriter<ItemGet>)
 {
-    let (player, &player_location, animation) = player.single();
-    if !animation.timer.finished() {
-        return;
-    }
-
-    for (entity, item_location, item) in items.iter() {
-        if player_location == *item_location {
-            commands.entity(entity).despawn();
-            event_writer.send(ItemGet{player, item: *item});
+    for (soot, &soot_location, animation) in soot_sprites.iter() {
+        if !animation.timer.finished() {
+            continue;
+        }
+        for (entity, item_location, item) in items.iter() {
+            if soot_location == *item_location {
+                commands.entity(entity).despawn();
+                event_writer.send(ItemGet{soot, item: *item});
+            }
         }
     }
 }
 
 fn add_item_to_inventory(
-    mut player: Query<&mut Inventory, With<Player>>,
+    mut soot: Query<&mut Inventory, With<SootSprite>>,
     mut event_reader: EventReader<ItemGet>)
 {
     for event in event_reader.iter() {
-        let mut inventory = player.get_mut(event.player).unwrap();
+        let mut inventory = soot.get_mut(event.soot).unwrap();
         inventory.add(event.item);
     }
 }

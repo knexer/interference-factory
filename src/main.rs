@@ -51,8 +51,8 @@ mod spawn_level;
 // - Record the player's moves (done)
 // - Add state to track whether we're in the first or second loop (done)
 // - Add a system to replay the player's moves from the first loop (done)
-// - Add a second player entity to represent the past self, only present during the second loop
-// - Have the past self replay the moves from the first loop instead of the player
+// - Add a second player entity to represent the past self, only present during the second loop (done)
+// - Have the past self replay the moves from the first loop instead of the player (done)
 // - Add state to track whose turn it is (player or past self should alternate)
 
 fn main() {
@@ -71,10 +71,10 @@ fn main() {
             (
                 (
                     process_movement_input,
-                    debuffer_move_inputs.run_if(in_state(LoopState::FirstLoop)),
-                    replay_move_attempts.run_if(in_state(LoopState::SecondLoop)),
-                    move_player_on_grid,
-                    record_move_attempts.run_if(in_state(LoopState::FirstLoop)),
+                    debuffer_move_inputs,
+                    replay_move_attempts,
+                    move_soot_on_grid,
+                    record_move_attempts,
                 ).chain().before(ApplyGridMovement),
                 (
                     play_item_pickup_sound,
@@ -84,7 +84,7 @@ fn main() {
         .insert_resource(MoveBuffer::default())
         .add_event::<MoveAttempt>()
         .insert_resource(TimeLoopRecording::default())
-        .add_state::<LoopState>()
+        .insert_resource(LoopCounter(0))
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_systems(OnExit(AppState::GameOver), (despawn_after_game_over, swap_loop))
         .run();
@@ -132,6 +132,9 @@ const GRID_SPACING: i32 = 130;
 #[derive(Component)]
 struct Player;
 
+#[derive(Component)]
+struct SootSprite;
+
 #[derive(Resource, Default)]
 struct MoveBuffer {
     next_move: IVec2
@@ -162,7 +165,7 @@ fn process_movement_input(
 
 #[derive(Event)]
 struct MoveAttempt {
-    player: Entity,
+    mover: Entity,
     offset: IVec2,
 }
 
@@ -170,7 +173,12 @@ fn debuffer_move_inputs(
     player: Query<(Entity, &AnimateTranslation), With<Player>>,
     mut move_buffer: ResMut<MoveBuffer>,
     mut event_writer: EventWriter<MoveAttempt>,
+    loop_counter: Res<LoopCounter>,
 ) {
+    if loop_counter.0 != 0 {
+        return;
+    }
+
     let (player, animation) = player.single();
     if !animation.timer.finished() {
         return;
@@ -182,11 +190,11 @@ fn debuffer_move_inputs(
     }
 
     move_buffer.next_move = IVec2::ZERO;
-    event_writer.send(MoveAttempt{player, offset});
+    event_writer.send(MoveAttempt{mover: player, offset});
 }
 
-fn move_player_on_grid(
-    mut player: Query<(&mut GridLocation, &mut Inventory), With<Player>>,
+fn move_soot_on_grid(
+    mut soot_sprites: Query<(&mut GridLocation, &mut Inventory), With<SootSprite>>,
     mut events: EventReader<MoveAttempt>,
 ) {
     if events.is_empty() {
@@ -197,8 +205,8 @@ fn move_player_on_grid(
         panic!("Multiple move attempts in one frame!");
     }
 
-    let &MoveAttempt{player: player_entity, offset} = events.iter().next().unwrap();
-    let (grid_location, inventory) = player.get(player_entity).unwrap();
+    let &MoveAttempt{mover: soot_entity, offset} = events.iter().next().unwrap();
+    let (grid_location, inventory) = soot_sprites.get(soot_entity).unwrap();
 
     let mut fuel_cost = 0;
     if offset.x < 0 {
@@ -217,7 +225,7 @@ fn move_player_on_grid(
         return;
     }
 
-    let (mut grid_location, mut inventory) = player.single_mut();
+    let (mut grid_location, mut inventory) = soot_sprites.get_mut(soot_entity).unwrap();
     grid_location.0 = next_pos;
 
     if fuel_cost > 0 {
@@ -233,18 +241,28 @@ struct TimeLoopRecording {
 fn record_move_attempts(
     mut recording: ResMut<TimeLoopRecording>,
     mut events: EventReader<MoveAttempt>,
+    loop_counter: Res<LoopCounter>,
 ) {
+    if loop_counter.0 != 0 {
+        return;
+    }
+
     for event in events.iter() {
         recording.moves.push(event.offset);
     }
 }
 
 fn replay_move_attempts(
-    player: Query<(Entity, &AnimateTranslation), With<Player>>,
+    soot_sprite: Query<(Entity, &AnimateTranslation), (With<SootSprite>, Without<Player>)>,
     mut recording: ResMut<TimeLoopRecording>,
     mut event_writer: EventWriter<MoveAttempt>,
+    loop_counter: Res<LoopCounter>,
 ) {
-    let (player, animation) = player.single();
+    if loop_counter.0 != 1 {
+        return;
+    }
+
+    let (soot_entity, animation) = soot_sprite.single();
     if !animation.timer.finished() {
         return;
     }
@@ -254,7 +272,7 @@ fn replay_move_attempts(
     }
 
     let offset = recording.moves.remove(0);
-    event_writer.send(MoveAttempt{player, offset});
+    event_writer.send(MoveAttempt{mover:soot_entity, offset});
 }
 
 fn detect_game_over(
@@ -271,22 +289,16 @@ fn detect_game_over(
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
-enum LoopState {
-    #[default]
-    FirstLoop,
-    SecondLoop,
-}
+#[derive(Resource)]
+struct LoopCounter(i32);
 
-fn swap_loop(loop_state: Res<State<LoopState>>, mut next_loop_state: ResMut<NextState<LoopState>>, mut recording: ResMut<TimeLoopRecording>) {
-    if *loop_state.get() == LoopState::FirstLoop {
-        next_loop_state.set(LoopState::SecondLoop);
-        println!("Done with first loop. Recording: {:?}", recording.moves);
-    } else {
-        next_loop_state.set(LoopState::FirstLoop);
-        recording.moves.clear();
-        println!("Done with second loop.");
+fn swap_loop(mut loop_counter: ResMut<LoopCounter>, mut recording: ResMut<TimeLoopRecording>) {
+    if loop_counter.0 == 0 {
+        loop_counter.0 += 1;
+        return;
     }
+    loop_counter.0 = 0;
+    recording.moves.clear();
 }
 
 fn play_item_pickup_sound(

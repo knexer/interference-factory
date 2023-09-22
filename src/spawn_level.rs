@@ -5,7 +5,7 @@ use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use rand::Rng;
 
 use crate::inventory::{Inventory, Item};
-use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y};
+use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter};
 use crate::grid::{GridLocation, AnimateTranslation, SnapToGrid, center_of, DistributeOnGrid};
 
 
@@ -20,6 +20,7 @@ impl Plugin for SpawnLevelPlugin {
             (
                 (
                     spawn_player,
+                    spawn_past_self,
                     spawn_grid,
                     spawn_candies,
                     spawn_fuel,
@@ -68,11 +69,48 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands.spawn((
         Player,
+        SootSprite,
         grid_location,
         Inventory{candies: 0, fuel: 0},
         SpriteBundle {
             texture: asset_server.load("soot-sprite.png"),
             transform: Transform::from_translation(center_of(&grid_location).extend(0.)),
+            ..default()
+        },
+        SnapToGrid,
+        AnimateTranslation{
+            start: center_of(&grid_location),
+            end: center_of(&grid_location),
+            timer: make_finished_timer(Duration::from_millis(200)),
+            ease: CubicSegment::new_bezier(Vec2::new(0., 0.), Vec2::new(0.4, 1.5)),
+        },
+        DespawnOnExitGameOver,
+    ));
+}
+
+fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_counter: Res<LoopCounter>) {
+    if loop_counter.0 != 1 {
+        return;
+    }
+
+    let grid_location = GridLocation(IVec2 {x: 0, y: MAX_Y - 1});
+    let make_finished_timer = |duration: Duration| {
+        let mut timer = Timer::new(duration, TimerMode::Once);
+        timer.tick(duration);
+        timer
+    };
+
+    commands.spawn((
+        SootSprite,
+        grid_location,
+        Inventory{candies: 0, fuel: 0},
+        SpriteBundle {
+            texture: asset_server.load("soot-sprite.png"),
+            transform: Transform::from_translation(center_of(&grid_location).extend(0.)),
+            sprite: Sprite {
+                color: Color::rgba(0.6, 0.6, 0.6, 0.6),
+                ..default()
+            },
             ..default()
         },
         SnapToGrid,
