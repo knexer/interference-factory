@@ -48,15 +48,6 @@ fn snap_to_grid(mut query: Query<(&mut Transform, Option<&mut AnimateTranslation
 #[derive(Component)]
 pub struct DistributeOnGrid;
 
-// TODO: how to make this only run when the grid location changes?
-// It's not as simple as naively using Changed<GridLocation>, because we also need all other entities with the same grid location to be updated.
-// Ref<GridLocation> might be useful here, as it gives us the location plus whether it changed.
-
-// I think this would work:
-// We could have our query get RefMut<GridLocation>. 
-// First collect a set of grid locations with changes,
-// and then filter the query by that set.
-// At that point we can proceed just as below.
 fn distribute_on_grid(mut query: Query<(&mut Transform, &GridLocation), With<DistributeOnGrid>>) {
     // Group by location.
     let mut transforms_per_location = query.iter_mut().fold(HashMap::new(), 

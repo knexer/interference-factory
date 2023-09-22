@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
-use crate::{AppState, DespawnOnExitGameOver, Player, Inventory};
+use crate::{AppState, DespawnOnExitGameOver, Player};
+
+use crate::inventory::Inventory;
 
 pub struct GameOverScreenPlugin;
 

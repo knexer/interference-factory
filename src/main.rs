@@ -5,9 +5,11 @@ use rand::Rng;
 
 use game_over_screen::GameOverScreenPlugin;
 use grid::{GridPlugin, GridLocation, SnapToGrid, DistributeOnGrid, center_of, ApplyGridMovement, AnimateTranslation};
+use inventory::{Inventory, Item, ItemGet, PickUpItems, InventoryPlugin};
 
 mod game_over_screen;
 mod grid;
+mod inventory;
 
 // Current gameplay:
 // - move down and right on a grid, optimize your path to get the most candy
@@ -25,7 +27,7 @@ mod grid;
 
 // Tech debt:
 // - No hierarchical entity relationships; everything is just flat right now. That is fine for now but not forever.
-// - Pull out more plugins. main.rs is a dumping ground right now lol. Maybe inventory stuff?
+// - Pull out more plugins. main.rs is a dumping ground right now lol.
 
 // Bugs:
 // - Fuel can spawn on the last cell, and if it does you won't get to use it as the game will end first.
@@ -56,6 +58,8 @@ fn main() {
         .add_state::<AppState>()
         .add_systems(Startup, spawn_cam)
         .add_plugins(GridPlugin)
+        .add_plugins(InventoryPlugin)
+        .configure_sets(Update, (ApplyGridMovement, PickUpItems).chain())
         .add_systems(OnEnter(AppState::Playing),
             (
                 (
@@ -76,16 +80,13 @@ fn main() {
                     record_move_attempts.run_if(in_state(LoopState::FirstLoop)),
                 ).chain().before(ApplyGridMovement),
                 (
-                    pick_up_item,
-                    add_item_to_inventory,
                     update_score_display,
                     update_fuel_display,
                     play_item_pickup_sound,
-                ).chain().after(ApplyGridMovement),
+                ).chain().after(PickUpItems),
                 detect_game_over,
             ).chain().run_if(in_state(AppState::Playing)))
         .insert_resource(MoveBuffer::default())
-        .add_event::<ItemGet>()
         .add_event::<MoveAttempt>()
         .insert_resource(TimeLoopRecording::default())
         .add_state::<LoopState>()
@@ -164,27 +165,6 @@ fn spawn_grid(mut commands: Commands,
 
 #[derive(Component)]
 struct Player;
-
-#[derive(Component, Clone, Copy)]
-struct Inventory {
-    candies: i32,
-    fuel: i32,
-}
-
-impl Inventory {
-    fn add(&mut self, item: Item) {
-        match item {
-            Item::Candy => self.candies += 1,
-            Item::Fuel => self.fuel += 1,
-        }
-    }
-}
-
-#[derive(Component, Clone, Copy)]
-enum Item {
-    Candy,
-    Fuel,
-}
 
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
     let grid_location = GridLocation(IVec2 {x: 0, y: MAX_Y - 1});
@@ -398,41 +378,6 @@ fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
            DespawnOnExitGameOver,
        ));
    }
-}
-
-#[derive(Event)]
-struct ItemGet {
-    player: Entity,
-    item: Item,
-}
-
-fn pick_up_item(
-    mut commands: Commands,
-    player: Query<(Entity, &GridLocation, &AnimateTranslation), (With<Player>, With<Inventory>)>,
-    items: Query<(Entity, &GridLocation, &Item)>,
-    mut event_writer: EventWriter<ItemGet>)
-{
-    let (player, &player_location, animation) = player.single();
-    if !animation.timer.finished() {
-        return;
-    }
-
-    for (entity, item_location, item) in items.iter() {
-        if player_location == *item_location {
-            commands.entity(entity).despawn();
-            event_writer.send(ItemGet{player, item: *item});
-        }
-    }
-}
-
-fn add_item_to_inventory(
-    mut player: Query<&mut Inventory, With<Player>>,
-    mut event_reader: EventReader<ItemGet>)
-{
-    for event in event_reader.iter() {
-        let mut inventory = player.get_mut(event.player).unwrap();
-        inventory.add(event.item);
-    }
 }
 
 fn play_item_pickup_sound(
