@@ -46,7 +46,7 @@ mod grid;
 // - Make score and fuel into components on the player (done)
 // - Review those changes, they felt a little awkward (done)
 // - Record the player's moves (done)
-// - Add state to track whether we're in the first or second loop
+// - Add state to track whether we're in the first or second loop (done)
 // - Add a system to replay the player's moves from the first loop
 // - Add state to track whose turn it is (player or past self should alternate)
 
@@ -73,7 +73,7 @@ fn main() {
                     process_movement_input,
                     debuffer_move_inputs,
                     move_player_on_grid,
-                    record_move_attempts,
+                    record_move_attempts.run_if(in_state(LoopState::FirstLoop)),
                 ).chain().before(ApplyGridMovement),
                 (
                     pick_up_item,
@@ -88,9 +88,10 @@ fn main() {
         .add_event::<ItemGet>()
         .add_event::<MoveAttempt>()
         .insert_resource(TimeLoopRecording::default())
+        .add_state::<LoopState>()
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_plugins(GameOverScreenPlugin)
-        .add_systems(OnExit(AppState::GameOver), (despawn_after_game_over, reset_recording))
+        .add_systems(OnExit(AppState::GameOver), (despawn_after_game_over, swap_loop))
         .run();
 }
 
@@ -320,20 +321,35 @@ fn record_move_attempts(
     }
 }
 
-fn reset_recording(mut recording: ResMut<TimeLoopRecording>) {
-    for i in 0..recording.moves.len() {
-        println!("Move {}: {}", i, recording.moves.pop().unwrap());
-    }
-}
-
-fn detect_game_over(mut next_state: ResMut<NextState<AppState>>, player: Query<(&GridLocation, &AnimateTranslation), With<Player>>) {
+fn detect_game_over(
+    player: Query<(&GridLocation, &AnimateTranslation), With<Player>>,
+    mut app_state: ResMut<NextState<AppState>>,
+) {
     let (player_location, animation) = player.single();
     if !animation.timer.finished() {
         return;
     }
 
     if player_location == (&GridLocation(IVec2{x: MAX_X - 1, y: 0})) {
-        next_state.set(AppState::GameOver);
+        app_state.set(AppState::GameOver);
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, States)]
+enum LoopState {
+    #[default]
+    FirstLoop,
+    SecondLoop,
+}
+
+fn swap_loop(loop_state: Res<State<LoopState>>, mut next_loop_state: ResMut<NextState<LoopState>>, mut recording: ResMut<TimeLoopRecording>) {
+    if *loop_state.get() == LoopState::FirstLoop {
+        next_loop_state.set(LoopState::SecondLoop);
+        println!("Done with first loop. Recording: {:?}", recording.moves);
+    } else {
+        next_loop_state.set(LoopState::FirstLoop);
+        recording.moves.clear();
+        println!("Done with second loop.");
     }
 }
 
