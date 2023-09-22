@@ -50,7 +50,9 @@ mod spawn_level;
 // - Review those changes, they felt a little awkward (done)
 // - Record the player's moves (done)
 // - Add state to track whether we're in the first or second loop (done)
-// - Add a system to replay the player's moves from the first loop
+// - Add a system to replay the player's moves from the first loop (done)
+// - Add a second player entity to represent the past self, only present during the second loop
+// - Have the past self replay the moves from the first loop instead of the player
 // - Add state to track whose turn it is (player or past self should alternate)
 
 fn main() {
@@ -69,7 +71,8 @@ fn main() {
             (
                 (
                     process_movement_input,
-                    debuffer_move_inputs,
+                    debuffer_move_inputs.run_if(in_state(LoopState::FirstLoop)),
+                    replay_move_attempts.run_if(in_state(LoopState::SecondLoop)),
                     move_player_on_grid,
                     record_move_attempts.run_if(in_state(LoopState::FirstLoop)),
                 ).chain().before(ApplyGridMovement),
@@ -234,6 +237,24 @@ fn record_move_attempts(
     for event in events.iter() {
         recording.moves.push(event.offset);
     }
+}
+
+fn replay_move_attempts(
+    player: Query<(Entity, &AnimateTranslation), With<Player>>,
+    mut recording: ResMut<TimeLoopRecording>,
+    mut event_writer: EventWriter<MoveAttempt>,
+) {
+    let (player, animation) = player.single();
+    if !animation.timer.finished() {
+        return;
+    }
+
+    if recording.moves.is_empty() {
+        return;
+    }
+
+    let offset = recording.moves.remove(0);
+    event_writer.send(MoveAttempt{player, offset});
 }
 
 fn detect_game_over(
