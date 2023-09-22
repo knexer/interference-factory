@@ -73,8 +73,9 @@ fn main() {
                     process_movement_input,
                     debuffer_move_inputs,
                     replay_move_attempts,
+                    validate_move,
                     move_soot_on_grid,
-                    record_move_attempts,
+                    record_moves,
                 ).chain().before(ApplyGridMovement),
                 (
                     play_item_pickup_sound,
@@ -83,6 +84,7 @@ fn main() {
             ).chain().run_if(in_state(AppState::Playing)))
         .insert_resource(MoveBuffer::default())
         .add_event::<MoveAttempt>()
+        .add_event::<Move>()
         .insert_resource(TimeLoopRecording::default())
         .insert_resource(LoopCounter(0))
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
@@ -158,7 +160,7 @@ fn process_movement_input(
         offset.y += 1;
     }
 
-    if offset.length_squared() > 0 {
+    if offset.length_squared() == 1 {
         move_buffer.next_move = offset;
     }
 }
@@ -193,65 +195,6 @@ fn debuffer_move_inputs(
     event_writer.send(MoveAttempt{mover: player, offset});
 }
 
-fn move_soot_on_grid(
-    mut soot_sprites: Query<(&mut GridLocation, &mut Inventory), With<SootSprite>>,
-    mut events: EventReader<MoveAttempt>,
-) {
-    if events.is_empty() {
-        return;
-    }
-
-    if events.len() > 1 {
-        panic!("Multiple move attempts in one frame!");
-    }
-
-    let &MoveAttempt{mover: soot_entity, offset} = events.iter().next().unwrap();
-    let (grid_location, inventory) = soot_sprites.get(soot_entity).unwrap();
-
-    let mut fuel_cost = 0;
-    if offset.x < 0 {
-        fuel_cost += 1;
-    }
-    if offset.y > 0 {
-        fuel_cost += 1;
-    }
-
-    if fuel_cost > inventory.fuel {
-        return;
-    }
-
-    let next_pos = grid_location.0 + offset;
-    if next_pos.x < 0 || next_pos.x >= MAX_X || next_pos.y < 0 || next_pos.y >= MAX_Y {
-        return;
-    }
-
-    let (mut grid_location, mut inventory) = soot_sprites.get_mut(soot_entity).unwrap();
-    grid_location.0 = next_pos;
-
-    if fuel_cost > 0 {
-        inventory.fuel -= fuel_cost;
-    }
-}
-
-#[derive(Resource, Default)]
-struct TimeLoopRecording {
-    moves: Vec<IVec2>,
-}
-
-fn record_move_attempts(
-    mut recording: ResMut<TimeLoopRecording>,
-    mut events: EventReader<MoveAttempt>,
-    loop_counter: Res<LoopCounter>,
-) {
-    if loop_counter.0 != 0 {
-        return;
-    }
-
-    for event in events.iter() {
-        recording.moves.push(event.offset);
-    }
-}
-
 fn replay_move_attempts(
     soot_sprite: Query<(Entity, &AnimateTranslation), (With<SootSprite>, Without<Player>)>,
     mut recording: ResMut<TimeLoopRecording>,
@@ -275,24 +218,111 @@ fn replay_move_attempts(
     event_writer.send(MoveAttempt{mover:soot_entity, offset});
 }
 
-fn detect_game_over(
-    player: Query<(&GridLocation, &AnimateTranslation), With<Player>>,
-    mut app_state: ResMut<NextState<AppState>>,
+#[derive(Event)]
+struct Move {
+    mover: Entity,
+    offset: IVec2,
+    fuel_cost: i32,
+}
+
+fn validate_move(
+    soot_sprites: Query<(&GridLocation, &Inventory), With<SootSprite>>,
+    mut attempts: EventReader<MoveAttempt>,
+    mut moves: EventWriter<Move>,
 ) {
-    let (player_location, animation) = player.single();
-    if !animation.timer.finished() {
+    if attempts.is_empty() {
         return;
     }
 
-    if player_location == (&GridLocation(IVec2{x: MAX_X - 1, y: 0})) {
-        app_state.set(AppState::GameOver);
+    if attempts.len() > 1 {
+        panic!("Multiple move attempts in one frame!");
     }
+
+    let &MoveAttempt{mover: soot_entity, offset} = attempts.iter().next().unwrap();
+    let (grid_location, inventory) = soot_sprites.get(soot_entity).unwrap();
+
+    let mut fuel_cost = 0;
+    if offset.x < 0 {
+        fuel_cost += 1;
+    }
+    if offset.y > 0 {
+        fuel_cost += 1;
+    }
+
+    if fuel_cost > inventory.fuel {
+        return;
+    }
+
+    let next_pos = grid_location.0 + offset;
+    if next_pos.x < 0 || next_pos.x >= MAX_X || next_pos.y < 0 || next_pos.y >= MAX_Y {
+        return;
+    }
+
+    moves.send(Move{mover: soot_entity, offset, fuel_cost});
+}
+
+fn move_soot_on_grid(
+    mut soot_sprites: Query<(&mut GridLocation, &mut Inventory), With<SootSprite>>,
+    mut events: EventReader<Move>,
+) {
+    if events.is_empty() {
+        return;
+    }
+
+    if events.len() > 1 {
+        panic!("Multiple moves in one frame!");
+    }
+
+    let &Move{mover: soot_entity, offset, fuel_cost} = events.iter().next().unwrap();
+    let (mut grid_location, mut inventory) = soot_sprites.get_mut(soot_entity).unwrap();
+    grid_location.0 += offset;
+
+    if fuel_cost > 0 {
+        inventory.fuel -= fuel_cost;
+    }
+}
+
+#[derive(Resource, Default)]
+struct TimeLoopRecording {
+    moves: Vec<IVec2>,
+}
+
+fn record_moves(
+    mut recording: ResMut<TimeLoopRecording>,
+    mut events: EventReader<Move>,
+    loop_counter: Res<LoopCounter>,
+) {
+    if loop_counter.0 != 0 {
+        return;
+    }
+
+    for event in events.iter() {
+        recording.moves.push(event.offset);
+    }
+}
+
+fn detect_game_over(
+    soots: Query<(&GridLocation, &AnimateTranslation), With<SootSprite>>,
+    mut app_state: ResMut<NextState<AppState>>,
+) {
+    for (soot_location, animation) in soots.iter() {
+        if !animation.timer.finished() {
+            return;
+        }
+
+        if soot_location != (&GridLocation(IVec2{x: MAX_X - 1, y: 0})) {
+            return;
+        }
+    }
+
+    app_state.set(AppState::GameOver);
 }
 
 #[derive(Resource)]
 struct LoopCounter(i32);
 
 fn swap_loop(mut loop_counter: ResMut<LoopCounter>, mut recording: ResMut<TimeLoopRecording>) {
+    println!("Moves recorded: {:?}", recording.moves);
     if loop_counter.0 == 0 {
         loop_counter.0 += 1;
         return;
