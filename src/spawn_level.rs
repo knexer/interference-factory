@@ -6,7 +6,7 @@ use rand::Rng;
 
 use crate::inventory::{Inventory, Item};
 use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter};
-use crate::grid::{GridLocation, AnimateTranslation, SnapToGrid, center_of, DistributeOnGrid};
+use crate::grid::{GridLocation, AnimateTranslation, SnapToGrid, DistributeOnGrid};
 
 
 #[derive(SystemSet, Hash, Debug, Clone, Eq, PartialEq)]
@@ -41,11 +41,10 @@ fn spawn_grid(mut commands: Commands,
         let size: Vec3 = Vec3::splat(128.);
         (
             grid_location.clone(),
+            SnapToGrid,
             MaterialMesh2dBundle {
                 mesh: mesh.clone(),
-                transform: Transform::default()
-                    .with_scale(size)
-                    .with_translation(center_of(&grid_location).extend(0.)),
+                transform: Transform::default().with_scale(size),
                 material: material.clone(),
                 ..default()
             },
@@ -74,13 +73,12 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
         Inventory{candies: 0, fuel: 0},
         SpriteBundle {
             texture: asset_server.load("soot-sprite.png"),
-            transform: Transform::from_translation(center_of(&grid_location).extend(0.)),
             ..default()
         },
         SnapToGrid,
         AnimateTranslation{
-            start: center_of(&grid_location),
-            end: center_of(&grid_location),
+            start: default(),
+            end: default(),
             timer: make_finished_timer(Duration::from_millis(200)),
             ease: CubicSegment::new_bezier(Vec2::new(0., 0.), Vec2::new(0.4, 1.5)),
         },
@@ -106,7 +104,6 @@ fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_
         Inventory{candies: 0, fuel: 0},
         SpriteBundle {
             texture: asset_server.load("soot-sprite.png"),
-            transform: Transform::from_translation(center_of(&grid_location).extend(0.)),
             sprite: Sprite {
                 color: Color::rgba(0.6, 0.6, 0.6, 0.6),
                 ..default()
@@ -115,8 +112,8 @@ fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_
         },
         SnapToGrid,
         AnimateTranslation{
-            start: center_of(&grid_location),
-            end: center_of(&grid_location),
+            start: default(),
+            end: default(),
             timer: make_finished_timer(Duration::from_millis(200)),
             ease: CubicSegment::new_bezier(Vec2::new(0., 0.), Vec2::new(0.4, 1.5)),
         },

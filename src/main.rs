@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use game_over_screen::GameOverScreenPlugin;
-use grid::{GridPlugin, GridLocation, ApplyGridMovement, AnimateTranslation};
+use grid::{GridPlugin, GridLocation, ApplyGridMovement, AnimateTranslation, MovementComplete};
 use inventory::{Inventory, Item, ItemGet, PickUpItems, InventoryPlugin};
 use spawn_level::{SpawnLevel, SpawnLevelPlugin};
 use ui::{UiPlugin, UpdateUi};
@@ -71,15 +71,14 @@ fn main() {
             (
                 (
                     process_movement_input,
-                    debuffer_move_inputs,
-                    replay_move_attempts,
+                    (debuffer_move_inputs, replay_move_attempts),
                     validate_move,
-                    move_soot_on_grid,
-                    record_moves,
+                    (move_soot_on_grid, record_moves),
                 ).chain().before(ApplyGridMovement),
                 (
                     play_item_pickup_sound,
                 ).chain().after(PickUpItems),
+                next_turn,
                 detect_game_over,
             ).chain().run_if(in_state(AppState::Playing)))
         .insert_resource(MoveBuffer::default())
@@ -87,6 +86,7 @@ fn main() {
         .add_event::<Move>()
         .insert_resource(TimeLoopRecording::default())
         .insert_resource(LoopCounter(0))
+        .insert_resource(TurnCounter(0))
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_systems(OnExit(AppState::GameOver), (despawn_after_game_over, swap_loop))
         .run();
@@ -321,6 +321,9 @@ fn detect_game_over(
 #[derive(Resource)]
 struct LoopCounter(i32);
 
+#[derive(Resource)]
+struct TurnCounter(i32);
+
 fn swap_loop(mut loop_counter: ResMut<LoopCounter>, mut recording: ResMut<TimeLoopRecording>) {
     println!("Moves recorded: {:?}", recording.moves);
     if loop_counter.0 == 0 {
@@ -329,6 +332,27 @@ fn swap_loop(mut loop_counter: ResMut<LoopCounter>, mut recording: ResMut<TimeLo
     }
     loop_counter.0 = 0;
     recording.moves.clear();
+}
+
+fn next_turn(
+    mut turn_counter: ResMut<TurnCounter>,
+    loop_counter: Res<LoopCounter>,
+    soots: Query<(&SootSprite, &AnimateTranslation), Changed<AnimateTranslation>>,
+    mut movement_events: EventReader<MovementComplete>,
+) {
+    if movement_events.is_empty() {
+        return;
+    }
+
+    if movement_events.len() > 1 {
+        panic!("Multiple movement events in one frame!");
+    }
+
+    // TODO: Hook in here to swap turns between player and past self.
+    // For now this is just doing some weird validation that the correct soot moved.
+    soots.get(movement_events.iter().next().unwrap().entity).unwrap();
+
+    turn_counter.0 = (turn_counter.0 + 1) % (loop_counter.0 + 1);
 }
 
 fn play_item_pickup_sound(
