@@ -53,7 +53,13 @@ mod spawn_level;
 // - Add a system to replay the player's moves from the first loop (done)
 // - Add a second player entity to represent the past self, only present during the second loop (done)
 // - Have the past self replay the moves from the first loop instead of the player (done)
-// - Add state to track whose turn it is (player or past self should alternate)
+// - Add state to track whose turn it is (player or past self should alternate) (done)
+// - Make player/past self only move when it's their turn (done)
+// - When one player has no more moves, skip their turn (done)
+// - Keep the same map for both loops
+// - One recording per loop, not one recording for the whole game
+// - Differentiate between next loop and next game
+// - Any number of loops - keep going until all candy is collected
 
 fn main() {
     App::new()
@@ -135,7 +141,9 @@ const GRID_SPACING: i32 = 130;
 struct Player;
 
 #[derive(Component)]
-struct SootSprite;
+struct SootSprite {
+    loop_number: i32,
+}
 
 #[derive(Resource, Default)]
 struct MoveBuffer {
@@ -175,9 +183,9 @@ fn debuffer_move_inputs(
     player: Query<(Entity, &AnimateTranslation), With<Player>>,
     mut move_buffer: ResMut<MoveBuffer>,
     mut event_writer: EventWriter<MoveAttempt>,
-    loop_counter: Res<LoopCounter>,
+    turn_counter: Res<TurnCounter>,
 ) {
-    if loop_counter.0 != 0 {
+    if turn_counter.0 != 0 {
         return;
     }
 
@@ -199,9 +207,9 @@ fn replay_move_attempts(
     soot_sprite: Query<(Entity, &AnimateTranslation), (With<SootSprite>, Without<Player>)>,
     mut recording: ResMut<TimeLoopRecording>,
     mut event_writer: EventWriter<MoveAttempt>,
-    loop_counter: Res<LoopCounter>,
+    turn_counter: Res<TurnCounter>,
 ) {
-    if loop_counter.0 != 1 {
+    if turn_counter.0 != 1 {
         return;
     }
 
@@ -337,7 +345,7 @@ fn swap_loop(mut loop_counter: ResMut<LoopCounter>, mut recording: ResMut<TimeLo
 fn next_turn(
     mut turn_counter: ResMut<TurnCounter>,
     loop_counter: Res<LoopCounter>,
-    soots: Query<(&SootSprite, &AnimateTranslation), Changed<AnimateTranslation>>,
+    soots: Query<(&SootSprite, &GridLocation)>,
     mut movement_events: EventReader<MovementComplete>,
 ) {
     if movement_events.is_empty() {
@@ -348,11 +356,34 @@ fn next_turn(
         panic!("Multiple movement events in one frame!");
     }
 
-    // TODO: Hook in here to swap turns between player and past self.
-    // For now this is just doing some weird validation that the correct soot moved.
-    soots.get(movement_events.iter().next().unwrap().entity).unwrap();
+    // Validate that the correct entity just moved.
+    let &MovementComplete{entity} = movement_events.iter().next().unwrap();
+    let (soot_sprite, _) = soots.get(entity).unwrap();
+    if soot_sprite.loop_number != turn_counter.0 {
+        panic!("Wrong entity moved! Expected loop {}, got loop {}.", loop_counter.0, soot_sprite.loop_number);
+    }
 
-    turn_counter.0 = (turn_counter.0 + 1) % (loop_counter.0 + 1);
+    let can_move = |loop_number: i32| {
+        for (soot_sprite, grid_location) in soots.iter() {
+            if soot_sprite.loop_number == loop_number && grid_location.0 == (IVec2{x: MAX_X - 1, y: 0}) {
+                return false;
+            }
+        }
+        true
+    };
+
+    let num_loops = loop_counter.0 + 1;
+    for turn_increment in 1..=num_loops {
+        let next_turn = (turn_counter.0 + turn_increment) % num_loops;
+        if !can_move(next_turn) {
+            continue;
+        }
+        turn_counter.0 = next_turn;
+        return;
+    }
+
+    // This case will happen if nobody can move; prepares us for next loop.
+    turn_counter.0 = 0;
 }
 
 fn play_item_pickup_sound(

@@ -68,7 +68,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands.spawn((
         Player,
-        SootSprite,
+        SootSprite{loop_number: 0},
         grid_location,
         Inventory{candies: 0, fuel: 0},
         SpriteBundle {
@@ -99,7 +99,7 @@ fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_
     };
 
     commands.spawn((
-        SootSprite,
+        SootSprite{loop_number: 1},
         grid_location,
         Inventory{candies: 0, fuel: 0},
         SpriteBundle {
