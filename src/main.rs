@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use game_over_screen::GameOverScreenPlugin;
 use grid::{GridPlugin, GridLocation, ApplyGridMovement, AnimateTranslation, MovementComplete};
 use inventory::{Inventory, Item, ItemGet, PickUpItems, InventoryPlugin};
-use spawn_level::{SpawnLevel, SpawnLevelPlugin};
+use spawn_level::SpawnLevelPlugin;
 use ui::{UiPlugin, UpdateUi};
 
 mod game_over_screen;
@@ -71,7 +71,6 @@ fn main() {
         .add_plugins(GameOverScreenPlugin)
         .add_state::<AppState>()
         .add_systems(Startup, spawn_cam)
-        .configure_sets(OnEnter(AppState::Playing), (SpawnLevel, ApplyGridMovement).chain())
         .configure_sets(Update, (ApplyGridMovement, PickUpItems, UpdateUi).chain())
         .add_systems(Update,
             (

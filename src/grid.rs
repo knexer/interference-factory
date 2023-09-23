@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::{AppState, GRID_SPACING};
@@ -12,7 +11,6 @@ impl Plugin for GridPlugin {
     fn build (&self, app: &mut App) {
         app
         .add_event::<MovementComplete>()
-        .add_systems(OnEnter(AppState::Playing), distribute_on_grid.in_set(ApplyGridMovement))
         .add_systems(Update, (
             snap_to_grid,
             animate_translation,
@@ -55,42 +53,6 @@ fn snap_to_grid(
             },
             None => {
                 transform.translation = destination.extend(0.);
-            },
-        }
-    }
-}
-
-#[derive(Component)]
-pub struct DistributeOnGrid;
-
-fn distribute_on_grid(mut query: Query<(&mut Transform, &GridLocation), With<DistributeOnGrid>>) {
-    // Group by location.
-    let mut transforms_per_location = query.iter_mut().fold(HashMap::new(), 
-        |mut map, (transform, grid_location)| {
-            map.entry(grid_location).or_insert(vec![]).push(transform);
-            map
-        });
-
-    for (grid_location, entities) in transforms_per_location.iter_mut() {
-        let center: Vec2 = (grid_location.0 * GRID_SPACING).as_vec2();
-        let count = entities.len() as i32;
-        match count {
-            1 => {
-                let transform = entities.first_mut().unwrap();
-                transform.translation = center.extend(0.);
-            },
-            _ => {
-                // Arrange the entities radially around the center.
-                let angle = 2. * std::f32::consts::PI / count as f32;
-                let initial_angle = if count % 2 == 0 { angle / 2. } else { 0. };
-                for (i, transform) in entities.iter_mut().enumerate() {
-                    let radial_vector = Vec2 {
-                        x: GRID_SPACING as f32 / 4. * (i as f32 * angle + initial_angle).cos(),
-                        y: GRID_SPACING as f32 / 4. * (i as f32 * angle + initial_angle).sin()
-                    };
-                    transform.translation = (center + radial_vector).extend(0.);
-                    transform.scale = Vec3::splat(0.7);
-                }
             },
         }
     }

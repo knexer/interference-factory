@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use bevy::prelude::*;
@@ -5,8 +6,8 @@ use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use rand::Rng;
 
 use crate::inventory::{Inventory, Item};
-use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter};
-use crate::grid::{GridLocation, AnimateTranslation, SnapToGrid, DistributeOnGrid};
+use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter, GRID_SPACING};
+use crate::grid::{GridLocation, AnimateTranslation, SnapToGrid};
 
 
 #[derive(SystemSet, Hash, Debug, Clone, Eq, PartialEq)]
@@ -25,7 +26,8 @@ impl Plugin for SpawnLevelPlugin {
                     spawn_candies,
                     spawn_fuel,
                 ),
-                apply_deferred
+                apply_deferred,
+                distribute_on_grid,
             ).in_set(SpawnLevel).chain());
     }
 }
@@ -124,8 +126,10 @@ fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_
 const NUM_CANDIES: usize = 10;
 
 fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
-   let mut rng = rand::thread_rng();
-   for _ in 0..NUM_CANDIES {
+    // TODO: Spawn the same stuff for each loop. (maybe - push to a spawn list that's saved between loops?)
+    // TODO: Don't spawn candies on the start space.
+    let mut rng = rand::thread_rng();
+    for _ in 0..NUM_CANDIES {
        let color =  match rng.gen_range(0..3) {
            0 => "red-candy.png",
            1 => "green-candy.png",
@@ -146,12 +150,15 @@ fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
            DistributeOnGrid,
            DespawnOnExitGameOver,
        ));
-   }
+    }
 }
 
 const NUM_FUEL: usize = 2;
 
 fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
+    // TODO: Spawn the same stuff for each loop. (maybe - push to a spawn list that's saved between loops?)
+    // TODO: Don't spawn fuel on the start space.
+    // TODO: Don't spawn fuel on the end space.
     let mut rng = rand::thread_rng();
     for _ in 0..NUM_FUEL {
         commands.spawn((
@@ -171,3 +178,38 @@ fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
     }
 }
 
+#[derive(Component)]
+pub struct DistributeOnGrid;
+
+fn distribute_on_grid(mut query: Query<(&mut Transform, &GridLocation), With<DistributeOnGrid>>) {
+    // Group by location.
+    let mut transforms_per_location = query.iter_mut().fold(HashMap::new(),
+        |mut map, (transform, grid_location)| {
+            map.entry(grid_location).or_insert(vec![]).push(transform);
+            map
+        });
+
+    for (grid_location, entities) in transforms_per_location.iter_mut() {
+        let center: Vec2 = (grid_location.0 * GRID_SPACING).as_vec2();
+        let count = entities.len() as i32;
+        match count {
+            1 => {
+                let transform = entities.first_mut().unwrap();
+                transform.translation = center.extend(0.);
+            },
+            _ => {
+                // Arrange the entities radially around the center.
+                let angle = 2. * std::f32::consts::PI / count as f32;
+                let initial_angle = if count % 2 == 0 { angle / 2. } else { 0. };
+                for (i, transform) in entities.iter_mut().enumerate() {
+                    let radial_vector = Vec2 {
+                        x: GRID_SPACING as f32 / 4. * (i as f32 * angle + initial_angle).cos(),
+                        y: GRID_SPACING as f32 / 4. * (i as f32 * angle + initial_angle).sin()
+                    };
+                    transform.translation = (center + radial_vector).extend(0.);
+                    transform.scale = Vec3::splat(0.7);
+                }
+            },
+        }
+    }
+}
