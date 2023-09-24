@@ -19,16 +19,19 @@ impl Plugin for SpawnLevelPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::Playing),
             (
+                reset_level,
                 (
                     spawn_player,
                     spawn_past_self,
                     spawn_grid,
-                    spawn_candies,
-                    spawn_fuel,
+                    add_candies_to_level,
+                    add_fuel_to_level,
                 ),
+                spawn_level,
                 apply_deferred,
                 distribute_on_grid,
-            ).in_set(SpawnLevel).chain());
+            ).in_set(SpawnLevel).chain())
+            .insert_resource::<Level>(default());
     }
 }
 
@@ -123,45 +126,67 @@ fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_
     ));
 }
 
+trait BundleBox {
+    fn apply_bundle(&self, commands: &mut Commands);
+}
+impl<T: Bundle + Clone> BundleBox for T {
+    fn apply_bundle(&self, commands: &mut Commands) {
+        commands.spawn(self.clone());
+    }
+}
+
+#[derive(Resource, Default)]
+struct Level {
+    spawn: Vec<Box<dyn BundleBox + Send + Sync>>,
+}
+
 const NUM_CANDIES: usize = 10;
 
-fn spawn_candies(mut commands: Commands, asset_server: Res<AssetServer>) {
-    // TODO: Spawn the same stuff for each loop. (maybe - push to a spawn list that's saved between loops?)
+fn add_candies_to_level(mut level: ResMut<Level>, loop_counter: Res<LoopCounter>, asset_server: Res<AssetServer>) {
+    if loop_counter.0 != 0 {
+        return;
+    }
+
     // TODO: Don't spawn candies on the start space.
     let mut rng = rand::thread_rng();
     for _ in 0..NUM_CANDIES {
-       let color =  match rng.gen_range(0..3) {
-           0 => "red-candy.png",
-           1 => "green-candy.png",
-           2 => "yellow-candy.png",
-           _ => unreachable!(),
-       };
-       commands.spawn((
-           Item::Candy,
-           GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
-           SpriteBundle {
-               texture: asset_server.load(color),
-               sprite: Sprite {
-                   custom_size: Some(Vec2::splat(64.)),
-                   ..default()
-               },
-               ..default()
-           },
-           DistributeOnGrid,
-           DespawnOnExitGameOver,
-       ));
+        let color =  match rng.gen_range(0..3) {
+            0 => "red-candy.png",
+            1 => "green-candy.png",
+            2 => "yellow-candy.png",
+            _ => unreachable!(),
+        };
+        let bundle = (
+            Item::Candy,
+            GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
+            SpriteBundle {
+                texture: asset_server.load(color),
+                sprite: Sprite {
+                    custom_size: Some(Vec2::splat(64.)),
+                    ..default()
+                },
+                ..default()
+            },
+            DistributeOnGrid,
+            DespawnOnExitGameOver,
+        );
+
+        level.spawn.push(Box::new(bundle));
     }
 }
 
 const NUM_FUEL: usize = 2;
 
-fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
-    // TODO: Spawn the same stuff for each loop. (maybe - push to a spawn list that's saved between loops?)
+fn add_fuel_to_level(mut level: ResMut<Level>, loop_counter: Res<LoopCounter>, asset_server: Res<AssetServer>) {
+    if loop_counter.0 != 0 {
+        return;
+    }
+
     // TODO: Don't spawn fuel on the start space.
     // TODO: Don't spawn fuel on the end space.
     let mut rng = rand::thread_rng();
     for _ in 0..NUM_FUEL {
-        commands.spawn((
+        let bundle = (
             Item::Fuel,
             GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
             SpriteBundle {
@@ -174,11 +199,27 @@ fn spawn_fuel(mut commands: Commands, asset_server: Res<AssetServer>) {
             },
             DistributeOnGrid,
             DespawnOnExitGameOver,
-        ));
+        );
+
+        level.spawn.push(Box::new(bundle));
     }
 }
 
-#[derive(Component)]
+fn reset_level(mut level: ResMut<Level>, loop_counter: Res<LoopCounter>) {
+    if loop_counter.0 != 0 {
+        return;
+    }
+
+    level.spawn.clear();
+}
+
+fn spawn_level(mut commands: Commands, level: Res<Level>) {
+    for spawn in level.spawn.iter() {
+        spawn.apply_bundle(&mut commands);
+    }
+}
+
+#[derive(Component, Clone, Copy)]
 pub struct DistributeOnGrid;
 
 fn distribute_on_grid(mut query: Query<(&mut Transform, &GridLocation), With<DistributeOnGrid>>) {

@@ -32,6 +32,7 @@ mod spawn_level;
 
 // Bugs:
 // - Fuel can spawn on the last cell, and if it does you won't get to use it as the game will end first.
+// - Some kind of double-despawn bug seems to be happening.
 
 // Polish:
 // - Show the actual candies/fuel collected in the score display instead of a number
@@ -44,6 +45,7 @@ mod spawn_level;
 // - Transparency for the candy sprite
 // - Queue inputs so they aren't skipped if the player is moving
 // - Animate a wiggle when the player tries to move off the grid
+// - Show the recorded moves on the grid (maybe a path in a different color and offset for each soot?)
 
 // Time loop todo:
 // - Make score and fuel into components on the player (done)
@@ -56,10 +58,11 @@ mod spawn_level;
 // - Add state to track whose turn it is (player or past self should alternate) (done)
 // - Make player/past self only move when it's their turn (done)
 // - When one player has no more moves, skip their turn (done)
-// - Keep the same map for both loops
+// - Keep the same map for both loops (done)
 // - One recording per loop, not one recording for the whole game
-// - Differentiate between next loop and next game
+// - Differentiate between next loop and next game (next loop - quick transition, no UI; next game - slow transition, show UI?)
 // - Any number of loops - keep going until all candy is collected
+// - Show the total collected candy across all soots in UI and at end of game
 
 fn main() {
     App::new()
@@ -104,10 +107,10 @@ enum AppState {
     GameOver,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 struct DespawnOnExitPlaying;
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 struct DespawnOnExitGameOver;
 
 fn despawn_after_playing(mut commands: Commands, query: Query<Entity, With<DespawnOnExitPlaying>>) {
