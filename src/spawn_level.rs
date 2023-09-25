@@ -6,7 +6,7 @@ use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use rand::Rng;
 
 use crate::inventory::{Inventory, Item};
-use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter, GRID_SPACING};
+use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter, GRID_SPACING, START_SPACE, END_SPACE};
 use crate::grid::{GridLocation, AnimateTranslation, SnapToGrid};
 
 
@@ -147,7 +147,6 @@ fn add_candies_to_level(mut level: ResMut<Level>, loop_counter: Res<LoopCounter>
         return;
     }
 
-    // TODO: Don't spawn candies on the start space.
     let mut rng = rand::thread_rng();
     for _ in 0..NUM_CANDIES {
         let color =  match rng.gen_range(0..3) {
@@ -156,9 +155,14 @@ fn add_candies_to_level(mut level: ResMut<Level>, loop_counter: Res<LoopCounter>
             2 => "yellow-candy.png",
             _ => unreachable!(),
         };
+        let mut location = IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)};
+        while location == (START_SPACE) {
+            location = IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)};
+        }
+
         let bundle = (
             Item::Candy,
-            GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
+            GridLocation (location),
             SpriteBundle {
                 texture: asset_server.load(color),
                 sprite: Sprite {
@@ -182,13 +186,16 @@ fn add_fuel_to_level(mut level: ResMut<Level>, loop_counter: Res<LoopCounter>, a
         return;
     }
 
-    // TODO: Don't spawn fuel on the start space.
-    // TODO: Don't spawn fuel on the end space.
     let mut rng = rand::thread_rng();
     for _ in 0..NUM_FUEL {
+        let mut location = IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)};
+        while location == (START_SPACE) || location == (END_SPACE) {
+            location = IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)};
+        }
+
         let bundle = (
             Item::Fuel,
-            GridLocation (IVec2 {x: rng.gen_range(0..MAX_X), y: rng.gen_range(0..MAX_Y)}),
+            GridLocation (location),
             SpriteBundle {
                 texture: asset_server.load("fuel.png"),
                 sprite: Sprite {

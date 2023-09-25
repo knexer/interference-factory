@@ -17,11 +17,12 @@ mod spawn_level;
 // - grab fuel to be able to go up or left, adds a nice bit of complexity to the optimization problem.
 
 // Immediate next steps:
-// - Basic player animation (done)
-// - Figure out system ordering - too many things are nondeterministic right now. (done)
-// - Sound on picking up candy and fuel (done-ish)
-// - Add a basic time loop - play twice, with your past self going through the level alongside you the second time.
-// - Iterate further on plugin structure (better)
+// - Add sound effects !! (done)
+// - Fix the double-despawn bug (kinda fixed, still latent)
+// - Fix fuel and candy spawning on first/last cell (done)
+// - Generalize to n time loops (go until all candy is collected)
+// - UI / appstate changes for time loops
+// - Iterate further on plugin structure
 
 // More gameplay:
 // - Add a between-levels upgrade system of some kind; spend candy, get upgrades.
@@ -33,6 +34,9 @@ mod spawn_level;
 // Bugs:
 // - Fuel can spawn on the last cell, and if it does you won't get to use it as the game will end first.
 // - Some kind of double-despawn bug seems to be happening.
+// Figured out some of why this was happening - pickups on the last spot were despawning twice, once when they were
+// picked up and once when the level despawned. I fixed this by not spawning pickups on the last spot.
+// However this is a broader issue with system ordering when transitioning between states.
 
 // Polish:
 // - Show the actual candies/fuel collected in the score display instead of a number
@@ -74,6 +78,7 @@ fn main() {
         .add_plugins(GameOverScreenPlugin)
         .add_state::<AppState>()
         .add_systems(Startup, spawn_cam)
+        .add_systems(OnEnter(AppState::Playing), reset_move_buffer)
         .configure_sets(Update, (ApplyGridMovement, PickUpItems, UpdateUi).chain())
         .add_systems(Update,
             (
@@ -138,6 +143,8 @@ fn spawn_cam(mut commands: Commands) {
 const MAX_X: i32 = 5;
 const MAX_Y: i32 = 5;
 const GRID_SPACING: i32 = 130;
+const START_SPACE: IVec2 = IVec2 {x: 0, y: MAX_Y - 1};
+const END_SPACE: IVec2 = IVec2 {x: MAX_X - 1, y: 0};
 
 #[derive(Component)]
 struct Player;
@@ -150,6 +157,10 @@ struct SootSprite {
 #[derive(Resource, Default)]
 struct MoveBuffer {
     next_move: IVec2
+}
+
+fn reset_move_buffer(mut move_buffer: ResMut<MoveBuffer>) {
+    move_buffer.next_move = IVec2::ZERO;
 }
 
 fn process_movement_input(
@@ -320,7 +331,7 @@ fn detect_game_over(
             return;
         }
 
-        if soot_location != (&GridLocation(IVec2{x: MAX_X - 1, y: 0})) {
+        if soot_location != (&GridLocation(END_SPACE)) {
             return;
         }
     }
@@ -367,7 +378,7 @@ fn next_turn(
 
     let can_move = |loop_number: i32| {
         for (soot_sprite, grid_location) in soots.iter() {
-            if soot_sprite.loop_number == loop_number && grid_location.0 == (IVec2{x: MAX_X - 1, y: 0}) {
+            if soot_sprite.loop_number == loop_number && grid_location.0 == (END_SPACE) {
                 return false;
             }
         }
