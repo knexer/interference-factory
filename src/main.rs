@@ -102,7 +102,7 @@ fn main() {
         .add_event::<Move>()
         .insert_resource(TimeLoopRecording::default())
         .insert_resource(LoopCounter(0))
-        .insert_resource(TurnCounter(0))
+        .insert_resource(CurrentSoot(SootId::Player))
         .add_systems(OnExit(AppState::Playing), despawn_after_playing)
         .add_systems(OnExit(AppState::GameOver), (despawn_after_game_over, swap_loop))
         .run();
@@ -154,7 +154,7 @@ struct Player;
 
 #[derive(Component)]
 struct SootSprite {
-    loop_number: i32,
+    id: SootId,
     turn_number: i32,
 }
 
@@ -200,9 +200,9 @@ fn debuffer_move_inputs(
     player: Query<(Entity, &AnimateTranslation), With<Player>>,
     mut move_buffer: ResMut<MoveBuffer>,
     mut event_writer: EventWriter<MoveAttempt>,
-    turn_counter: Res<TurnCounter>,
+    current_soot: Res<CurrentSoot>,
 ) {
-    if turn_counter.0 != 0 {
+    if current_soot.0 != SootId::Player {
         return;
     }
 
@@ -224,14 +224,14 @@ fn replay_move_attempts(
     soot_sprites: Query<(Entity, &AnimateTranslation, &SootSprite)>,
     recording: ResMut<TimeLoopRecording>,
     mut event_writer: EventWriter<MoveAttempt>,
-    turn_counter: Res<TurnCounter>,
+    current_soot: Res<CurrentSoot>,
 ) {
-    if turn_counter.0 == 0 {
+    if current_soot.0 == SootId::Player {
         return;
     }
 
     for (soot_entity, animation, soot) in soot_sprites.iter() {
-        if soot.loop_number != turn_counter.0 {
+        if soot.id != current_soot.0 {
             continue;
         }
 
@@ -239,7 +239,7 @@ fn replay_move_attempts(
             continue;
         }
 
-        if let Some(moves) = recording.moves.get(soot.loop_number as usize) {
+        if let Some(moves) = recording.moves.get(soot.id.loop_number() as usize) {
             if let Some(&offset) = moves.get(soot.turn_number as usize){
                 event_writer.send(MoveAttempt{mover:soot_entity, offset});
             }
@@ -280,7 +280,7 @@ fn validate_move(
     }
 
     if fuel_cost > inventory.fuel {
-        if soot.loop_number != 0 {
+        if soot.id != SootId::Player {
             skip_turn.send(MovementComplete{entity: soot_entity});
         }
         return;
@@ -288,7 +288,7 @@ fn validate_move(
 
     let next_pos = grid_location.0 + offset;
     if next_pos.x < 0 || next_pos.x >= MAX_X || next_pos.y < 0 || next_pos.y >= MAX_Y {
-        if soot.loop_number != 0 {
+        if soot.id != SootId::Player {
             skip_turn.send(MovementComplete{entity: soot_entity});
         }
         return;
@@ -334,9 +334,9 @@ impl Default for TimeLoopRecording {
 fn record_moves(
     mut recording: ResMut<TimeLoopRecording>,
     mut events: EventReader<Move>,
-    turn_counter: Res<TurnCounter>,
+    current_soot: Res<CurrentSoot>,
 ) {
-    if turn_counter.0 != 0 {
+    if current_soot.0 != SootId::Player {
         return;
     }
 
@@ -366,7 +366,29 @@ fn detect_game_over(
 struct LoopCounter(i32);
 
 #[derive(Resource)]
-struct TurnCounter(i32);
+struct CurrentSoot(SootId);
+
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
+enum SootId {
+    Player,
+    Recording(i32),
+}
+impl SootId {
+    fn loop_number(&self) -> i32 {
+        match self {
+            SootId::Player => 0,
+            SootId::Recording(loop_number) => *loop_number,
+        }
+    }
+}
+impl From<i32> for SootId {
+    fn from(loop_number: i32) -> Self {
+        match loop_number {
+            0 => Self::Player,
+            loop_number => Self::Recording(loop_number),
+        }
+    }
+}
 
 const NUM_LOOPS: i32 = 3;
 
@@ -382,7 +404,7 @@ fn swap_loop(mut loop_counter: ResMut<LoopCounter>, mut recording: ResMut<TimeLo
 }
 
 fn next_turn(
-    mut turn_counter: ResMut<TurnCounter>,
+    mut current_soot: ResMut<CurrentSoot>,
     loop_counter: Res<LoopCounter>,
     mut soots: Query<(&mut SootSprite, &GridLocation)>,
     mut movement_events: EventReader<MovementComplete>,
@@ -398,15 +420,15 @@ fn next_turn(
     // Validate that the correct entity just moved.
     let &MovementComplete{entity} = movement_events.iter().next().unwrap();
     let (mut soot_sprite, _) = soots.get_mut(entity).unwrap();
-    if soot_sprite.loop_number != turn_counter.0 {
-        panic!("Wrong entity moved! Expected loop {}, got loop {}.", loop_counter.0, soot_sprite.loop_number);
+    if soot_sprite.id != current_soot.0 {
+        panic!("Wrong entity moved! Expected loop {:?}, got loop {:?}.", current_soot.0, soot_sprite.id);
     }
 
     soot_sprite.turn_number += 1;
 
-    let can_move = |loop_number: i32| {
+    let can_move = |soot_id: SootId| {
         for (soot_sprite, grid_location) in soots.iter() {
-            if soot_sprite.loop_number == loop_number && grid_location.0 == (END_SPACE) {
+            if soot_sprite.id == soot_id && grid_location.0 == (END_SPACE) {
                 return false;
             }
         }
@@ -415,16 +437,16 @@ fn next_turn(
 
     let num_loops = loop_counter.0 + 1;
     for turn_increment in 1..=num_loops {
-        let next_turn = (turn_counter.0 + turn_increment) % num_loops;
-        if !can_move(next_turn) {
+        let next_soot: SootId = ((current_soot.0.loop_number() + turn_increment) % num_loops).into();
+        if !can_move(next_soot) {
             continue;
         }
-        turn_counter.0 = next_turn;
+        current_soot.0 = next_soot;
         return;
     }
 
     // This case will happen if nobody can move; prepares us for next loop.
-    turn_counter.0 = 0;
+    current_soot.0 = SootId::Player;
 }
 
 fn play_item_pickup_sound(

@@ -6,7 +6,7 @@ use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use rand::Rng;
 
 use crate::inventory::{Inventory, Item};
-use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter, GRID_SPACING, START_SPACE, END_SPACE};
+use crate::{AppState, DespawnOnExitGameOver, Player, MAX_X, MAX_Y, SootSprite, LoopCounter, GRID_SPACING, START_SPACE, END_SPACE, SootId};
 use crate::grid::{GridLocation, AnimateTranslation, SnapToGrid};
 
 
@@ -73,7 +73,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands.spawn((
         Player,
-        SootSprite{loop_number: 0, turn_number: 0},
+        SootSprite{id: SootId::Player, turn_number: 0},
         grid_location,
         Inventory{candies: 0, fuel: 0},
         SpriteBundle {
@@ -101,7 +101,7 @@ fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_
         };
 
         commands.spawn((
-            SootSprite{loop_number: loop_num, turn_number: 0},
+            SootSprite{id: SootId::Recording(loop_num), turn_number: 0},
             grid_location,
             Inventory{candies: 0, fuel: 0},
             SpriteBundle {
