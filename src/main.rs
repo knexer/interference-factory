@@ -30,6 +30,9 @@ mod spawn_level;
 // Tech debt:
 // - No hierarchical entity relationships; everything is just flat right now. That is fine for now but not forever.
 // - Pull out more plugins. main.rs is a dumping ground right now lol. Next: looping? movement? application state?
+// - Event-based control flow can easily lead to hard bugs like deadlocks. Is there a better way then events for
+// signaling between systems when I need to guarantee some invariant? Maybe a State, so we can more directly model this
+// with a state machine?
 
 // Bugs:
 // - Fuel can spawn on the last cell, and if it does you won't get to use it as the game will end first.
@@ -152,6 +155,7 @@ struct Player;
 #[derive(Component)]
 struct SootSprite {
     loop_number: i32,
+    turn_number: i32,
 }
 
 #[derive(Resource, Default)]
@@ -217,26 +221,30 @@ fn debuffer_move_inputs(
 }
 
 fn replay_move_attempts(
-    soot_sprite: Query<(Entity, &AnimateTranslation), (With<SootSprite>, Without<Player>)>,
-    mut recording: ResMut<TimeLoopRecording>,
+    soot_sprites: Query<(Entity, &AnimateTranslation, &SootSprite)>,
+    recording: ResMut<TimeLoopRecording>,
     mut event_writer: EventWriter<MoveAttempt>,
     turn_counter: Res<TurnCounter>,
 ) {
-    if turn_counter.0 != 1 {
+    if turn_counter.0 == 0 {
         return;
     }
 
-    let (soot_entity, animation) = soot_sprite.single();
-    if !animation.timer.finished() {
-        return;
-    }
+    for (soot_entity, animation, soot) in soot_sprites.iter() {
+        if soot.loop_number != turn_counter.0 {
+            continue;
+        }
 
-    if recording.moves.is_empty() {
-        return;
-    }
+        if !animation.timer.finished() {
+            continue;
+        }
 
-    let offset = recording.moves.remove(0);
-    event_writer.send(MoveAttempt{mover:soot_entity, offset});
+        if let Some(moves) = recording.moves.get(soot.loop_number as usize) {
+            if let Some(&offset) = moves.get(soot.turn_number as usize){
+                event_writer.send(MoveAttempt{mover:soot_entity, offset});
+            }
+        }
+    }
 }
 
 #[derive(Event)]
@@ -247,9 +255,10 @@ struct Move {
 }
 
 fn validate_move(
-    soot_sprites: Query<(&GridLocation, &Inventory), With<SootSprite>>,
+    soot_sprites: Query<(&GridLocation, &Inventory, &SootSprite)>,
     mut attempts: EventReader<MoveAttempt>,
     mut moves: EventWriter<Move>,
+    mut skip_turn: EventWriter<MovementComplete>,
 ) {
     if attempts.is_empty() {
         return;
@@ -260,7 +269,7 @@ fn validate_move(
     }
 
     let &MoveAttempt{mover: soot_entity, offset} = attempts.iter().next().unwrap();
-    let (grid_location, inventory) = soot_sprites.get(soot_entity).unwrap();
+    let (grid_location, inventory, soot) = soot_sprites.get(soot_entity).unwrap();
 
     let mut fuel_cost = 0;
     if offset.x < 0 {
@@ -271,11 +280,17 @@ fn validate_move(
     }
 
     if fuel_cost > inventory.fuel {
+        if soot.loop_number != 0 {
+            skip_turn.send(MovementComplete{entity: soot_entity});
+        }
         return;
     }
 
     let next_pos = grid_location.0 + offset;
     if next_pos.x < 0 || next_pos.x >= MAX_X || next_pos.y < 0 || next_pos.y >= MAX_Y {
+        if soot.loop_number != 0 {
+            skip_turn.send(MovementComplete{entity: soot_entity});
+        }
         return;
     }
 
@@ -303,22 +318,30 @@ fn move_soot_on_grid(
     }
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct TimeLoopRecording {
-    moves: Vec<IVec2>,
+    moves: Vec<Vec<IVec2>>,
+}
+
+impl Default for TimeLoopRecording {
+    fn default() -> Self {
+        Self {
+            moves: vec![vec![]],
+        }
+    }
 }
 
 fn record_moves(
     mut recording: ResMut<TimeLoopRecording>,
     mut events: EventReader<Move>,
-    loop_counter: Res<LoopCounter>,
+    turn_counter: Res<TurnCounter>,
 ) {
-    if loop_counter.0 != 0 {
+    if turn_counter.0 != 0 {
         return;
     }
 
     for event in events.iter() {
-        recording.moves.push(event.offset);
+        recording.moves[0].push(event.offset);
     }
 }
 
@@ -345,20 +368,23 @@ struct LoopCounter(i32);
 #[derive(Resource)]
 struct TurnCounter(i32);
 
+const NUM_LOOPS: i32 = 3;
+
 fn swap_loop(mut loop_counter: ResMut<LoopCounter>, mut recording: ResMut<TimeLoopRecording>) {
     println!("Moves recorded: {:?}", recording.moves);
-    if loop_counter.0 == 0 {
+    if loop_counter.0 == NUM_LOOPS - 1 {
+        loop_counter.0 = 0;
+        recording.moves = vec![vec![]];
+    } else {
         loop_counter.0 += 1;
-        return;
+        recording.moves.insert(0, vec![]);
     }
-    loop_counter.0 = 0;
-    recording.moves.clear();
 }
 
 fn next_turn(
     mut turn_counter: ResMut<TurnCounter>,
     loop_counter: Res<LoopCounter>,
-    soots: Query<(&SootSprite, &GridLocation)>,
+    mut soots: Query<(&mut SootSprite, &GridLocation)>,
     mut movement_events: EventReader<MovementComplete>,
 ) {
     if movement_events.is_empty() {
@@ -371,10 +397,12 @@ fn next_turn(
 
     // Validate that the correct entity just moved.
     let &MovementComplete{entity} = movement_events.iter().next().unwrap();
-    let (soot_sprite, _) = soots.get(entity).unwrap();
+    let (mut soot_sprite, _) = soots.get_mut(entity).unwrap();
     if soot_sprite.loop_number != turn_counter.0 {
         panic!("Wrong entity moved! Expected loop {}, got loop {}.", loop_counter.0, soot_sprite.loop_number);
     }
+
+    soot_sprite.turn_number += 1;
 
     let can_move = |loop_number: i32| {
         for (soot_sprite, grid_location) in soots.iter() {

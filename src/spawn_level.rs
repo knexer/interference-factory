@@ -73,7 +73,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands.spawn((
         Player,
-        SootSprite{loop_number: 0},
+        SootSprite{loop_number: 0, turn_number: 0},
         grid_location,
         Inventory{candies: 0, fuel: 0},
         SpriteBundle {
@@ -92,38 +92,36 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
 }
 
 fn spawn_past_self(mut commands: Commands, asset_server: Res<AssetServer>, loop_counter: Res<LoopCounter>) {
-    if loop_counter.0 != 1 {
-        return;
-    }
+    for loop_num in 1..=loop_counter.0 {
+        let grid_location = GridLocation(IVec2 {x: 0, y: MAX_Y - 1});
+        let make_finished_timer = |duration: Duration| {
+            let mut timer = Timer::new(duration, TimerMode::Once);
+            timer.tick(duration);
+            timer
+        };
 
-    let grid_location = GridLocation(IVec2 {x: 0, y: MAX_Y - 1});
-    let make_finished_timer = |duration: Duration| {
-        let mut timer = Timer::new(duration, TimerMode::Once);
-        timer.tick(duration);
-        timer
-    };
-
-    commands.spawn((
-        SootSprite{loop_number: 1},
-        grid_location,
-        Inventory{candies: 0, fuel: 0},
-        SpriteBundle {
-            texture: asset_server.load("soot-sprite.png"),
-            sprite: Sprite {
-                color: Color::rgba(0.6, 0.6, 0.6, 0.6),
+        commands.spawn((
+            SootSprite{loop_number: loop_num, turn_number: 0},
+            grid_location,
+            Inventory{candies: 0, fuel: 0},
+            SpriteBundle {
+                texture: asset_server.load("soot-sprite.png"),
+                sprite: Sprite {
+                    color: Color::rgba(0.6, 0.6, 0.6, 0.6),
+                    ..default()
+                },
                 ..default()
             },
-            ..default()
-        },
-        SnapToGrid,
-        AnimateTranslation{
-            start: default(),
-            end: default(),
-            timer: make_finished_timer(Duration::from_millis(200)),
-            ease: CubicSegment::new_bezier(Vec2::new(0., 0.), Vec2::new(0.4, 1.5)),
-        },
-        DespawnOnExitGameOver,
-    ));
+            SnapToGrid,
+            AnimateTranslation{
+                start: default(),
+                end: default(),
+                timer: make_finished_timer(Duration::from_millis(200)),
+                ease: CubicSegment::new_bezier(Vec2::new(0., 0.), Vec2::new(0.4, 1.5)),
+            },
+            DespawnOnExitGameOver,
+        ));
+    }
 }
 
 trait BundleBox {
